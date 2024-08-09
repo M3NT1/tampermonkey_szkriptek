@@ -1,0 +1,185 @@
+// ==UserScript==
+// @name         JIRA Assignee and Status Buttons with Combined Filter, Reset, and Counter Update
+// @namespace    http://tampermonkey.net/
+// @version      0.1
+// @description  Add buttons based on assignees and statuses in JIRA version pages, filter issues by assignee or status on button click, reset filter with a reset button, and update the results counter
+// @author       Your Name
+// @match        https://jira.ulyssys.hu/projects/EKOZIG/versions/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    let activeAssigneeButton = null; // Variable to keep track of the currently active assignee button
+    let activeStatusButton = null; // Variable to keep track of the currently active status button
+    let selectedAssignee = null; // Variable to store the selected assignee
+    let selectedStatus = null; // Variable to store the selected status
+
+    // Function to create a new button with the specified style
+    function createButton(text, onClick, isActive = false) {
+        const button = document.createElement('a');
+        button.innerText = text;
+        button.href = '#'; // Prevent default link behavior
+        button.className = 'aui-button aui-button-primary';
+        button.style.margin = '5px';
+        if (isActive) {
+            button.style.backgroundColor = 'green';
+        }
+        button.addEventListener('click', (event) => {
+            event.preventDefault(); // Prevent default link behavior
+            onClick(button);
+        });
+        return button;
+    }
+
+    // Function to add buttons to the page
+    function addButtons() {
+        const assigneeElements = document.querySelectorAll('.assignee .author-avatar-wrapper');
+        const statusElements = document.querySelectorAll('.status .jira-issue-status-lozenge');
+        const headerElement = document.querySelector('.issue-list-header');
+
+        if (headerElement && assigneeElements.length > 0 && statusElements.length > 0) {
+            // Create a container for the assignee buttons
+            const assigneeButtonContainer = document.createElement('div');
+            assigneeButtonContainer.style.display = 'flex';
+            assigneeButtonContainer.style.flexWrap = 'wrap';
+            assigneeButtonContainer.style.marginTop = '10px';
+
+            // Create the reset button for assignees
+            const resetAssigneeButton = createButton('Alaphelyzet', (btn) => {
+                if (activeAssigneeButton) {
+                    activeAssigneeButton.style.backgroundColor = ''; // Reset the previous active button
+                }
+                btn.style.backgroundColor = 'green';
+                activeAssigneeButton = btn; // Set the new active button
+                selectedAssignee = null;
+                filterIssues();
+                updateCounter();
+            }, true); // Set the reset button as active by default
+            assigneeButtonContainer.appendChild(resetAssigneeButton);
+
+            // Use a Set to keep track of unique assignee names
+            const uniqueAssignees = new Set();
+
+            assigneeElements.forEach(assigneeElement => {
+                const assigneeName = assigneeElement.getAttribute('data-tooltip');
+                if (!uniqueAssignees.has(assigneeName)) {
+                    uniqueAssignees.add(assigneeName);
+                    const button = createButton(assigneeName, (btn) => {
+                        if (activeAssigneeButton) {
+                            activeAssigneeButton.style.backgroundColor = ''; // Reset the previous active button
+                        }
+                        btn.style.backgroundColor = 'green';
+                        activeAssigneeButton = btn; // Set the new active button
+                        selectedAssignee = assigneeName;
+                        filterIssues();
+                        updateCounter();
+                    });
+                    assigneeButtonContainer.appendChild(button);
+                }
+            });
+
+            // Insert the assignee button container after the header element
+            headerElement.parentNode.insertBefore(assigneeButtonContainer, headerElement.nextSibling);
+
+            // Create a container for the status buttons
+            const statusButtonContainer = document.createElement('div');
+            statusButtonContainer.style.display = 'flex';
+            statusButtonContainer.style.flexWrap = 'wrap';
+            statusButtonContainer.style.marginTop = '10px';
+
+            // Create the reset button for statuses
+            const resetStatusButton = createButton('Alaphelyzet', (btn) => {
+                if (activeStatusButton) {
+                    activeStatusButton.style.backgroundColor = ''; // Reset the previous active button
+                }
+                btn.style.backgroundColor = 'green';
+                activeStatusButton = btn; // Set the new active button
+                selectedStatus = null;
+                filterIssues();
+                updateCounter();
+            }, true); // Set the reset button as active by default
+            statusButtonContainer.appendChild(resetStatusButton);
+
+            // Use a Set to keep track of unique status names
+            const uniqueStatuses = new Set();
+
+            statusElements.forEach(statusElement => {
+                const statusName = statusElement.textContent.trim();
+                if (!uniqueStatuses.has(statusName)) {
+                    uniqueStatuses.add(statusName);
+                    const button = createButton(statusName, (btn) => {
+                        if (activeStatusButton) {
+                            activeStatusButton.style.backgroundColor = ''; // Reset the previous active button
+                        }
+                        btn.style.backgroundColor = 'green';
+                        activeStatusButton = btn; // Set the new active button
+                        selectedStatus = statusName;
+                        filterIssues();
+                        updateCounter();
+                    });
+                    statusButtonContainer.appendChild(button);
+                }
+            });
+
+            // Insert the status button container after the assignee button container
+            assigneeButtonContainer.parentNode.insertBefore(statusButtonContainer, assigneeButtonContainer.nextSibling);
+        } else {
+            console.error('Header element, assignee elements, or status elements not found');
+        }
+    }
+
+    // Function to filter issues by assignee and status
+    function filterIssues() {
+        const issueRows = document.querySelectorAll('.release-report-issues tr');
+        issueRows.forEach(row => {
+            const assigneeElement = row.querySelector('.assignee .author-avatar-wrapper');
+            const statusElement = row.querySelector('.status .jira-issue-status-lozenge');
+            const currentAssignee = assigneeElement ? assigneeElement.getAttribute('data-tooltip') : null;
+            const currentStatus = statusElement ? statusElement.textContent.trim() : null;
+
+            const matchesAssignee = !selectedAssignee || currentAssignee === selectedAssignee;
+            const matchesStatus = !selectedStatus || currentStatus === selectedStatus;
+
+            if (matchesAssignee && matchesStatus) {
+                row.style.display = ''; // Show the row
+            } else {
+                row.style.display = 'none'; // Hide the row
+            }
+        });
+    }
+
+    // Function to reset the filter and show all issues
+    function resetFilter() {
+        const issueRows = document.querySelectorAll('.release-report-issues tr');
+        issueRows.forEach(row => {
+            row.style.display = ''; // Show all rows
+        });
+    }
+
+    // Function to update the results counter
+    function updateCounter() {
+        const issueRows = document.querySelectorAll('.release-report-issues tr');
+        const visibleRows = Array.from(issueRows).filter(row => row.style.display !== 'none');
+        const startCount = visibleRows.length > 0 ? 1 : 0;
+        const endCount = visibleRows.length;
+        const totalCount = visibleRows.length; // Update total count to match visible rows
+
+        const resultsCountStart = document.querySelector('.release-report-total-issue-count .results-count-start');
+        const resultsCountEnd = document.querySelector('.release-report-total-issue-count .results-count-end');
+        const resultsCountTotal = document.querySelector('.release-report-total-issue-count .results-count-total');
+
+        if (resultsCountStart && resultsCountEnd && resultsCountTotal) {
+            resultsCountStart.textContent = startCount;
+            resultsCountEnd.textContent = endCount;
+            resultsCountTotal.textContent = totalCount;
+        }
+    }
+
+    // Wait for the page to load
+    window.addEventListener('load', () => {
+        addButtons();
+        updateCounter(); // Initial counter update
+    });
+})();
