@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JIRA Assignee and Status Buttons with Combined Filter, Reset, and Counter Update
 // @namespace    http://tampermonkey.net/
-// @version      1.1
+// @version      1.2
 // @description  Add buttons based on assignees and statuses in JIRA version pages, filter issues by assignee or status on button click, reset filter with a reset button, and update the results counter
 // @author       Your Name
 // @match        https://jira.ulyssys.hu/projects/EKOZIG/versions/*
@@ -12,9 +12,8 @@
     'use strict';
 
     let activeAssigneeButton = null; // Variable to keep track of the currently active assignee button
-    let activeStatusButton = null; // Variable to keep track of the currently active status button
     let selectedAssignee = null; // Variable to store the selected assignee
-    let selectedStatus = null; // Variable to store the selected status
+    let selectedStatuses = new Set(); // Set to store selected statuses
 
     // Function to create a new button with the specified style
     function createButton(text, onClick, isActive = false) {
@@ -92,12 +91,14 @@
 
             // Create the reset button for statuses
             const resetStatusButton = createButton('Alaphelyzet', (btn) => {
-                if (activeStatusButton) {
-                    activeStatusButton.style.backgroundColor = ''; // Reset the previous active button
-                }
+                selectedStatuses.clear();
+                const statusButtons = statusButtonContainer.querySelectorAll('a');
+                statusButtons.forEach(button => {
+                    if (button !== btn) {
+                        button.style.backgroundColor = ''; // Reset all status buttons
+                    }
+                });
                 btn.style.backgroundColor = 'green';
-                activeStatusButton = btn; // Set the new active button
-                selectedStatus = null;
                 filterIssues();
                 updateCounter();
             }, true); // Set the reset button as active by default
@@ -111,13 +112,14 @@
                 if (!uniqueStatuses.has(statusName)) {
                     uniqueStatuses.add(statusName);
                     const button = createButton(statusName, (btn) => {
-                        if (activeStatusButton) {
-                            activeStatusButton.style.backgroundColor = ''; // Reset the previous active button
+                        if (selectedStatuses.has(statusName)) {
+                            selectedStatuses.delete(statusName);
+                            btn.style.backgroundColor = ''; // Turn off the button
+                        } else {
+                            selectedStatuses.add(statusName);
+                            btn.style.backgroundColor = 'green'; // Turn on the button
                         }
                         resetStatusButton.style.backgroundColor = ''; // Reset the reset button
-                        btn.style.backgroundColor = 'green';
-                        activeStatusButton = btn; // Set the new active button
-                        selectedStatus = statusName;
                         filterIssues();
                         updateCounter();
                     });
@@ -142,7 +144,7 @@
             const currentStatus = statusElement ? statusElement.textContent.trim() : null;
 
             const matchesAssignee = !selectedAssignee || currentAssignee === selectedAssignee;
-            const matchesStatus = !selectedStatus || currentStatus === selectedStatus;
+            const matchesStatus = selectedStatuses.size === 0 || selectedStatuses.has(currentStatus);
 
             if (matchesAssignee && matchesStatus) {
                 row.style.display = ''; // Show the row
