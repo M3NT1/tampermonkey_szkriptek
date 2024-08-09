@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JIRA Assignee and Status Buttons with Combined Filter, Reset, and Counter Update
 // @namespace    http://tampermonkey.net/
-// @version      0.1
+// @version      1.1
 // @description  Add buttons based on assignees and statuses in JIRA version pages, filter issues by assignee or status on button click, reset filter with a reset button, and update the results counter
 // @author       Your Name
 // @match        https://jira.ulyssys.hu/projects/EKOZIG/versions/*
@@ -70,6 +70,7 @@
                         if (activeAssigneeButton) {
                             activeAssigneeButton.style.backgroundColor = ''; // Reset the previous active button
                         }
+                        resetAssigneeButton.style.backgroundColor = ''; // Reset the reset button
                         btn.style.backgroundColor = 'green';
                         activeAssigneeButton = btn; // Set the new active button
                         selectedAssignee = assigneeName;
@@ -113,6 +114,7 @@
                         if (activeStatusButton) {
                             activeStatusButton.style.backgroundColor = ''; // Reset the previous active button
                         }
+                        resetStatusButton.style.backgroundColor = ''; // Reset the reset button
                         btn.style.backgroundColor = 'green';
                         activeStatusButton = btn; // Set the new active button
                         selectedStatus = statusName;
