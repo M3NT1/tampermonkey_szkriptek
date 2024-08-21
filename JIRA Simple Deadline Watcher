@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JIRA Simple Deadline Watcher
 // @namespace    http://tampermonkey.net/
-// @version      0.6
+// @version      0.8
 // @description  Színezi a feladatokat a határidő és a resolved dátum függvényében
 // @match        https://jira.ulyssys.hu/browse/*
 // @grant        none
@@ -11,42 +11,47 @@
     'use strict';
 
     function checkDeadline() {
-        const dueDateElement = document.querySelector('#datesmodule .dates dd.date time');
+        const dueDateLabel = document.querySelector('#datesmodule .dates dt label[for="duedate"]');
+        const dueDateElement = dueDateLabel ? dueDateLabel.closest('dt').nextElementSibling.querySelector('time') : null;
         const resolvedDateElement = document.querySelector('#resolutiondate-val time');
-        if (!dueDateElement) return;
-
-        const dueDate = new Date(dueDateElement.getAttribute('datetime'));
-        const today = new Date();
-        const daysLeft = Math.ceil((dueDate - today) / (1000 * 60 * 60 * 24));
-
         const datesModule = document.getElementById('datesmodule');
         if (!datesModule) return;
 
         let backgroundColor = '';
         let warningText = '';
 
-        if (resolvedDateElement) {
-            const resolvedDate = new Date(resolvedDateElement.getAttribute('datetime'));
-            backgroundColor = 'rgba(0, 255, 0, 0.1)'; // Zöld háttér
+        if (!dueDateLabel) {
+            // Nincs határidő beállítva
+            backgroundColor = 'rgba(0, 0, 255, 0.1)'; // Kék háttér
+            warningText = 'Nincs határidő beállítva a jegyhez!';
+        } else if (dueDateElement) {
+            const dueDate = new Date(dueDateElement.getAttribute('datetime'));
+            const today = new Date();
+            const daysLeft = Math.ceil((dueDate - today) / (1000 * 60 * 60 * 24));
 
-            if (resolvedDate > dueDate) {
-                const daysLate = Math.ceil((resolvedDate - dueDate) / (1000 * 60 * 60 * 24));
-                warningText = `Elkészült státusz állítás, ${daysLate} nappal a határidőt követően.`;
+            if (resolvedDateElement) {
+                const resolvedDate = new Date(resolvedDateElement.getAttribute('datetime'));
+                backgroundColor = 'rgba(0, 255, 0, 0.1)'; // Zöld háttér
+
+                if (resolvedDate > dueDate) {
+                    const daysLate = Math.ceil((resolvedDate - dueDate) / (1000 * 60 * 60 * 24));
+                    warningText = `Elkészült státusz állítás, ${daysLate} nappal a határidőt követően.`;
+                } else {
+                    const daysEarly = Math.ceil((dueDate - resolvedDate) / (1000 * 60 * 60 * 24));
+                    warningText = `Elkészült ${daysEarly} nappal a határidő előtt.`;
+                }
             } else {
-                const daysEarly = Math.ceil((dueDate - resolvedDate) / (1000 * 60 * 60 * 24));
-                warningText = `Elkészült ${daysEarly} nappal a határidő előtt.`;
-            }
-        } else {
-            // Eredeti színezési logika
-            if (daysLeft <= 0) {
-                backgroundColor = 'rgba(255, 0, 0, 0.1)';
-                warningText = 'Határidő lejárt!';
-            } else if (daysLeft <= 3) {
-                backgroundColor = 'rgba(255, 165, 0, 0.1)';
-                warningText = `Figyelem! Határidő ${daysLeft} nap múlva!`;
-            } else if (daysLeft <= 7) {
-                backgroundColor = 'rgba(255, 255, 0, 0.1)';
-                warningText = `Figyelem! Határidő ${daysLeft} nap múlva!`;
+                // Eredeti színezési logika
+                if (daysLeft <= 0) {
+                    backgroundColor = 'rgba(255, 0, 0, 0.1)';
+                    warningText = 'Határidő lejárt!';
+                } else if (daysLeft <= 3) {
+                    backgroundColor = 'rgba(255, 165, 0, 0.1)';
+                    warningText = `Figyelem! Határidő ${daysLeft} nap múlva!`;
+                } else if (daysLeft <= 7) {
+                    backgroundColor = 'rgba(255, 255, 0, 0.1)';
+                    warningText = `Figyelem! Határidő ${daysLeft} nap múlva!`;
+                }
             }
         }
 
