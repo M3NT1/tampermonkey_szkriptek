@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JIRA Simple Deadline Watcher
 // @namespace    http://tampermonkey.net/
-// @version      0.5
+// @version      0.6
 // @description  Színezi a feladatokat a határidő és a resolved dátum függvényében
 // @match        https://jira.ulyssys.hu/browse/*
 // @grant        none
@@ -31,9 +31,10 @@
 
             if (resolvedDate > dueDate) {
                 const daysLate = Math.ceil((resolvedDate - dueDate) / (1000 * 60 * 60 * 24));
-                warningText = `Elkészült! Státusz állítás, ${daysLate} nappal a határidőt követően.`;
+                warningText = `Elkészült státusz állítás, ${daysLate} nappal a határidőt követően.`;
             } else {
-                warningText = 'Elkészült';
+                const daysEarly = Math.ceil((dueDate - resolvedDate) / (1000 * 60 * 60 * 24));
+                warningText = `Elkészült ${daysEarly} nappal a határidő előtt.`;
             }
         } else {
             // Eredeti színezési logika
