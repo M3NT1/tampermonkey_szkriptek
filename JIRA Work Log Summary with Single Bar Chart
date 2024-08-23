@@ -1,0 +1,178 @@
+// ==UserScript==
+// @name         JIRA Work Log Summary with Single Bar Chart
+// @namespace    http://tampermonkey.net/
+// @version      1.6
+// @description  Összegzi a JIRA Work Log adatokat egy összesített bar charttal
+// @match        https://jira.ulyssys.hu/browse/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    const RETRY_INTERVAL = 1000; // 1 second
+    const MAX_RETRIES = 30; // 30 seconds total
+
+    function waitForElement(selector, callback, retryCount = 0) {
+        const element = document.querySelector(selector);
+        if (element) {
+            callback(element);
+        } else if (retryCount < MAX_RETRIES) {
+            setTimeout(() => waitForElement(selector, callback, retryCount + 1), RETRY_INTERVAL);
+        } else {
+            console.log(`Element ${selector} not found after ${MAX_RETRIES} retries`);
+        }
+    }
+
+    function initializeScript() {
+        waitForElement('#timetrackingmodule', (timeTrackingModule) => {
+            waitForElement('li[data-id="worklog-tabpanel"]', (workLogTab) => {
+                if (!workLogTab.classList.contains('active')) {
+                    workLogTab.querySelector('a').click();
+                }
+                setTimeout(() => processWorkLogs(timeTrackingModule), 1000);
+            });
+        });
+    }
+
+    function processWorkLogs(timeTrackingModule) {
+        const workLogs = {};
+
+        const actionContainers = document.querySelectorAll('.actionContainer');
+        if (actionContainers.length === 0) {
+            console.log("No work log entries found");
+            return;
+        }
+
+        actionContainers.forEach(container => {
+            const nameElement = container.querySelector('.user-hover');
+            if (!nameElement) return;
+
+            const name = nameElement.textContent.trim();
+            const timeSpentElement = container.querySelector('.worklog-duration');
+            if (!timeSpentElement) return;
+
+            const timeSpent = timeSpentElement.textContent.trim();
+
+            if (!workLogs[name]) {
+                workLogs[name] = { totalMinutes: 0, count: 0 };
+            }
+
+            workLogs[name].totalMinutes += convertTimeToMinutes(timeSpent);
+            workLogs[name].count += 1;
+        });
+
+        if (Object.keys(workLogs).length > 0) {
+            createSummarySection(workLogs, timeTrackingModule);
+        } else {
+            console.log("No work logs processed");
+        }
+    }
+
+    function convertTimeToMinutes(timeString) {
+        const parts = timeString.split(' ');
+        let minutes = 0;
+
+        parts.forEach(part => {
+            if (part.includes('h')) {
+                const hours = parseFloat(part.replace('h', ''));
+                minutes += hours * 60;
+            } else if (part.includes('m')) {
+                minutes += parseInt(part);
+            } else if (part.includes('.')) {
+                const hours = parseFloat(part);
+                minutes += hours * 60;
+            }
+        });
+
+        return minutes;
+    }
+
+    function createSummarySection(workLogs, timeTrackingModule) {
+        const sortedWorkLogs = Object.entries(workLogs).sort((a, b) => b[1].totalMinutes - a[1].totalMinutes);
+        const totalMinutes = sortedWorkLogs.reduce((sum, [_, data]) => sum + data.totalMinutes, 0);
+
+        const summaryHtml = `
+        <div id="workLogSummaryModule" class="module toggle-wrap">
+            <div id="workLogSummaryModule_heading" class="mod-header">
+                <button class="aui-button toggle-title" aria-label="Work Log Summary" aria-controls="workLogSummaryModule" aria-expanded="true" resolved="">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14">
+                        <g fill="none" fill-rule="evenodd">
+                            <path d="M3.29175 4.793c-.389.392-.389 1.027 0 1.419l2.939 2.965c.218.215.5.322.779.322s.556-.107.769-.322l2.93-2.955c.388-.392.388-1.027 0-1.419-.389-.392-1.018-.392-1.406 0l-2.298 2.317-2.307-2.327c-.194-.195-.449-.293-.703-.293-.255 0-.51.098-.703.293z" fill="#344563"></path>
+                        </g>
+                    </svg>
+                </button>
+                <h4 class="toggle-title" id="workLogSummaryModule-label">Work Log Summary</h4>
+            </div>
+            <div class="mod-content">
+                <div id="workLogSummary_single_table_info" class="tt_inner">
+                    <dl>
+                        <dt id="workLogSummary_single_text" class="tt_text" title="Total Work Log - ${formatMinutes(totalMinutes)}">
+                            Total Work Log:
+                        </dt>
+                        <dd class="tt_graph">
+                            <table id="workLogSummary_single_graph" cellspacing="0" cellpadding="0" class="tt_graph">
+                                <tr class="tt_graph">
+                                    ${sortedWorkLogs.map(([name, data], index) => `
+                                        <td style="width:${(data.totalMinutes / totalMinutes) * 100}%; background-color:${getColor(index)};" title="${name}: ${formatMinutes(data.totalMinutes)}">
+                                            <img src="/images/border/spacer.gif" style="height:10px; width:100%; border-width:0" class="hideOnPrint" alt="${name}: ${formatMinutes(data.totalMinutes)}">
+                                        </td>
+                                    `).join('')}
+                                </tr>
+                            </table>
+                        </dd>
+                        <dd id="workLogSummary_single_values" class="tt_values" title="Total Work Log - ${formatMinutes(totalMinutes)}">
+                            ${formatMinutes(totalMinutes)}
+                        </dd>
+                    </dl>
+                    ${sortedWorkLogs.map(([name, data], index) => `
+                        <dl>
+                            <dt class="tt_text" title="${name} - ${formatMinutes(data.totalMinutes)}">
+                                <span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background-color: ${getColor(index)}; margin-right: 5px;"></span>
+                                ${name} (${data.count}):
+                            </dt>
+                            <dd class="tt_values">${formatMinutes(data.totalMinutes)}</dd>
+                        </dl>
+                    `).join('')}
+                </div>
+            </div>
+        </div>
+        `;
+
+        const existingSummary = document.getElementById('workLogSummaryModule');
+        if (existingSummary) {
+            existingSummary.remove();
+        }
+        timeTrackingModule.insertAdjacentHTML('afterend', summaryHtml);
+    }
+
+    function formatMinutes(minutes) {
+        const hours = Math.floor(minutes / 60);
+        const remainingMinutes = Math.round(minutes % 60);
+        return `${hours}h ${remainingMinutes}m`;
+    }
+
+    function getColor(index) {
+        const colors = ['#89afd7', '#ec8e00', '#51a825', '#cccccc', '#4a6785'];
+        return colors[index % colors.length];
+    }
+
+    // Figyeljük a DOM változásait
+    const observer = new MutationObserver((mutations) => {
+        for (let mutation of mutations) {
+            if (mutation.type === 'childList') {
+                for (let node of mutation.addedNodes) {
+                    if (node.nodeType === Node.ELEMENT_NODE && node.id === 'timetrackingmodule') {
+                        initializeScript();
+                        return;
+                    }
+                }
+            }
+        }
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    // Kezdeti inicializálás
+    initializeScript();
+})();
