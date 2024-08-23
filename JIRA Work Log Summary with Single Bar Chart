@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JIRA Work Log Summary with Single Bar Chart
 // @namespace    http://tampermonkey.net/
-// @version      1.6
+// @version      1.7
 // @description  Összegzi a JIRA Work Log adatokat egy összesített bar charttal
 // @match        https://jira.ulyssys.hu/browse/*
 // @grant        none
@@ -129,9 +129,9 @@
                         <dl>
                             <dt class="tt_text" title="${name} - ${formatMinutes(data.totalMinutes)}">
                                 <span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background-color: ${getColor(index)}; margin-right: 5px;"></span>
-                                ${name} (${data.count}):
+                                ${name}:
                             </dt>
-                            <dd class="tt_values">${formatMinutes(data.totalMinutes)}</dd>
+                            <dd class="tt_values">${formatMinutes(data.totalMinutes)} (${data.count})</dd>
                         </dl>
                     `).join('')}
                 </div>
