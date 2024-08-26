@@ -1,0 +1,110 @@
+// ==UserScript==
+// @name         JIRA Kitelepítés Összesítő
+// @namespace    http://tampermonkey.net/
+// @version      1.6
+// @description  Kigyűjti és megjeleníti a kitelepítési információkat a JIRA kommentekből
+// @match        https://jira.ulyssys.hu/browse/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    const environmentOrder = [
+        'ekozig_telepites_develop',
+        'ekozig_telepites_teszt',
+        'ekozig_telepites_NAK-Teszt',
+        'ekozig_telepites_NAK-Oktato',
+        'ekozig_telepites_NAK-Eles'
+    ];
+
+    function createDeploymentSection(deployments) {
+        const newSection = document.createElement('div');
+        newSection.id = 'deploymentModule';
+        newSection.className = 'module toggle-wrap';
+        newSection.innerHTML = `
+            <div class="mod-header">
+                <h4 class="toggle-title">Kitelepítési Információk</h4>
+            </div>
+            <div class="mod-content">
+                <ul style="list-style-type: none; padding-left: 0;">
+                    ${deployments.map(({env, deployed, dates}) => `
+                        <li>
+                            <span style="display: inline-block; width: 20px; text-align: center;">
+                                ${deployed ? '✅' : '❌'}
+                            </span>
+                            ${env.replace('ekozig_telepites_', '')} ${deployed ? `- ${dates.join(', ')}` : ''}
+                        </li>
+                    `).join('')}
+                </ul>
+            </div>
+        `;
+        return newSection;
+    }
+
+    function processComments() {
+        const comments = document.querySelectorAll('.issue-data-block.activity-comment');
+        const deployments = Object.fromEntries(
+            environmentOrder.map(env => [env, { deployed: false, dates: [] }])
+        );
+
+        comments.forEach(comment => {
+            const commentText = comment.querySelector('.action-body').textContent.trim();
+            const match = commentText.match(/Kitelepítve (.+?) környezetre/);
+            if (match) {
+                const environment = match[1];
+                if (environment in deployments) {
+                    const dateElement = comment.querySelector('.action-details .date');
+                    const date = dateElement ? dateElement.getAttribute('title') : 'Ismeretlen dátum';
+                    deployments[environment].deployed = true;
+                    deployments[environment].dates.push(date);
+                }
+            }
+        });
+
+        // Rendezzük a dátumokat minden környezeten belül
+        Object.values(deployments).forEach(env => {
+            env.dates.sort((a, b) => new Date(a) - new Date(b));
+        });
+
+        // Rendezzük a környezeteket a megadott sorrend szerint
+        return environmentOrder.map(env => ({
+            env: env,
+            deployed: deployments[env].deployed,
+            dates: deployments[env].dates
+        }));
+    }
+
+    function insertDeploymentSection() {
+        const timeTrackingModule = document.getElementById('timetrackingmodule');
+        if (!timeTrackingModule) {
+            console.log('Time Tracking module not found, retrying...');
+            setTimeout(insertDeploymentSection, 500);
+            return;
+        }
+
+        const existingDeploymentModule = document.getElementById('deploymentModule');
+        if (existingDeploymentModule) {
+            existingDeploymentModule.remove();
+        }
+
+        const deployments = processComments();
+        const newSection = createDeploymentSection(deployments);
+
+        timeTrackingModule.parentNode.insertBefore(newSection, timeTrackingModule);
+    }
+
+    function waitForComments() {
+        const commentsTab = document.querySelector('#comment-tabpanel');
+        if (!commentsTab || !commentsTab.classList.contains('active-tab')) {
+            console.log('Comments tab not active, waiting...');
+            setTimeout(waitForComments, 500);
+            return;
+        }
+
+        insertDeploymentSection();
+    }
+
+    // Indítsuk el a folyamatot
+    waitForComments();
+})();
