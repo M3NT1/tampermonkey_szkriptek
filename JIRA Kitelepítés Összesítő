@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         JIRA Kitelepítés Összesítő
+// @name         JIRA EKOZIG Kitelepítés Összesítő
 // @namespace    http://tampermonkey.net/
-// @version      1.6
-// @description  Kigyűjti és megjeleníti a kitelepítési információkat a JIRA kommentekből
-// @match        https://jira.ulyssys.hu/browse/*
+// @version      1.9
+// @description  Kigyűjti és megjeleníti a kitelepítési információkat az EKOZIG JIRA kommentekből
+// @match        https://jira.ulyssys.hu/browse/EKOZIG-*
 // @grant        none
 // ==/UserScript==
 
@@ -42,8 +42,7 @@
         return newSection;
     }
 
-    function processComments() {
-        const comments = document.querySelectorAll('.issue-data-block.activity-comment');
+    function processComments(comments) {
         const deployments = Object.fromEntries(
             environmentOrder.map(env => [env, { deployed: false, dates: [] }])
         );
@@ -62,12 +61,10 @@
             }
         });
 
-        // Rendezzük a dátumokat minden környezeten belül
         Object.values(deployments).forEach(env => {
             env.dates.sort((a, b) => new Date(a) - new Date(b));
         });
 
-        // Rendezzük a környezeteket a megadott sorrend szerint
         return environmentOrder.map(env => ({
             env: env,
             deployed: deployments[env].deployed,
@@ -75,11 +72,11 @@
         }));
     }
 
-    function insertDeploymentSection() {
+    function insertDeploymentSection(deployments) {
         const timeTrackingModule = document.getElementById('timetrackingmodule');
         if (!timeTrackingModule) {
             console.log('Time Tracking module not found, retrying...');
-            setTimeout(insertDeploymentSection, 500);
+            setTimeout(() => insertDeploymentSection(deployments), 500);
             return;
         }
 
@@ -88,23 +85,40 @@
             existingDeploymentModule.remove();
         }
 
-        const deployments = processComments();
         const newSection = createDeploymentSection(deployments);
-
         timeTrackingModule.parentNode.insertBefore(newSection, timeTrackingModule);
     }
 
-    function waitForComments() {
-        const commentsTab = document.querySelector('#comment-tabpanel');
-        if (!commentsTab || !commentsTab.classList.contains('active-tab')) {
-            console.log('Comments tab not active, waiting...');
-            setTimeout(waitForComments, 500);
-            return;
-        }
-
-        insertDeploymentSection();
+    function getCommentsWithoutActivation() {
+        return document.querySelectorAll('.issue-data-block.activity-comment');
     }
 
-    // Indítsuk el a folyamatot
-    waitForComments();
+    function activateCommentsTab() {
+        const commentsTab = document.querySelector('#comment-tabpanel');
+        if (commentsTab && !commentsTab.classList.contains('active-tab')) {
+            commentsTab.querySelector('a').click();
+            return true;
+        }
+        return false;
+    }
+
+    function main() {
+        let comments = getCommentsWithoutActivation();
+
+        if (comments.length === 0) {
+            if (activateCommentsTab()) {
+                setTimeout(main, 1000); // Várunk 1 másodpercet a fül aktiválása után
+                return;
+            } else {
+                console.log('Nem sikerült aktiválni a Comments fület');
+                return;
+            }
+        }
+
+        const deployments = processComments(comments);
+        insertDeploymentSection(deployments);
+    }
+
+    // Várunk 5 másodpercet, mielőtt elindítjuk a szkriptet
+    setTimeout(main, 5000);
 })();
