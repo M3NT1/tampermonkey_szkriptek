@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JIRA EKOZIG Kitelepítés Összesítő
 // @namespace    http://tampermonkey.net/
-// @version      1.9
+// @version      2.0
 // @description  Kigyűjti és megjeleníti a kitelepítési információkat az EKOZIG JIRA kommentekből
 // @match        https://jira.ulyssys.hu/browse/EKOZIG-*
 // @grant        none
@@ -14,8 +14,10 @@
         'ekozig_telepites_develop',
         'ekozig_telepites_teszt',
         'ekozig_telepites_NAK-Teszt',
+        'ekozig_telepites_Uly-Oktatoi',  // Új környezet hozzáadva
         'ekozig_telepites_NAK-Oktato',
         'ekozig_telepites_NAK-Eles'
+
     ];
 
     function createDeploymentSection(deployments) {
