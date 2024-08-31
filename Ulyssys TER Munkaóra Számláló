@@ -1,0 +1,116 @@
+// ==UserScript==
+// @name         Ulyssys TER Munkaóra Számláló
+// @namespace    http://tampermonkey.net/
+// @version      1.6
+// @description  Megszámolja a munkanapokat és kiszámolja a ledolgozandó és könyvelt munkaórákat az Ulyssys TER rendszerben
+// @match        https://ter.ulyssys.hu/ter/wt/wtown
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    function calculateWorkHours() {
+        // Munkanapok számolása
+        const workDays = Array.from(document.querySelectorAll('#form\\:workingTimeDays_data tr[data-ri]'))
+            .filter(row => row.querySelector('td:nth-child(4)').textContent.trim() === 'munkanap')
+            .length;
+        const workHours = workDays * 8;
+
+        // Könyvelt órák összegzése és különböző naptípusok óráinak számolása
+        let totalBookedHours = 0;
+        let restDayHours = 0;
+        let freeDayHours = 0;
+        let holidayHours = 0;
+        const rows = document.querySelectorAll('#form\\:workingTimeDays_data tr[data-ri]');
+        rows.forEach(row => {
+            const dayType = row.querySelector('td:nth-child(4)').textContent.trim();
+            const hoursText = row.querySelector('td:nth-child(5)').textContent.trim();
+            if (hoursText !== '-') {
+                const hours = parseFloat(hoursText.replace(' óra', '').replace(',', '.'));
+                if (!isNaN(hours)) {
+                    totalBookedHours += hours;
+                    switch(dayType) {
+                        case 'pihenőnap':
+                            restDayHours += hours;
+                            break;
+                        case 'szabadnap':
+                            freeDayHours += hours;
+                            break;
+                        case 'ünnepnap':
+                            holidayHours += hours;
+                            break;
+                    }
+                }
+            }
+        });
+
+        // Hiány vagy túlóra számítása
+        const difference = totalBookedHours - workHours;
+        let differenceText = '';
+        if (difference < 0) {
+            differenceText = `<strong>Hiány:</strong> ${Math.abs(difference).toFixed(2)} óra`;
+        } else if (difference > 0) {
+            differenceText = `<strong>Túlóra:</strong> ${difference.toFixed(2)} óra`;
+        } else {
+            differenceText = 'Nincs eltérés';
+        }
+
+        // Eredmények frissítése
+        const resultDiv = document.getElementById('workHoursResult');
+        if (resultDiv) {
+            resultDiv.querySelector('#ledolgozandoOra').textContent = `${workHours} óra`;
+            resultDiv.querySelector('#konyveltOra').textContent = `${totalBookedHours.toFixed(2)} óra`;
+            resultDiv.querySelector('#differenceOra').innerHTML = differenceText;
+            resultDiv.querySelector('#restDayHours').textContent = `${restDayHours.toFixed(2)} óra`;
+            resultDiv.querySelector('#freeDayHours').textContent = `${freeDayHours.toFixed(2)} óra`;
+            resultDiv.querySelector('#holidayHours').textContent = `${holidayHours.toFixed(2)} óra`;
+        }
+    }
+
+    function createResultDiv() {
+        const resultDiv = document.createElement('div');
+        resultDiv.id = 'workHoursResult';
+        resultDiv.style.cssText = 'position: fixed; top: 10px; right: 10px; background-color: #f0f0f0; padding: 10px; border-radius: 5px; box-shadow: 0 0 10px rgba(0,0,0,0.1); z-index: 9999; font-family: Arial, sans-serif;';
+        resultDiv.innerHTML = `
+            <p style="margin: 0 0 10px 0;"><strong>A hónapban ledolgozandó munkaóra:</strong> <span id="ledolgozandoOra">0 óra</span></p>
+            <p style="margin: 0 0 10px 0;"><strong>Könyvelt idő összeg:</strong> <span id="konyveltOra">0 óra</span></p>
+            <p style="margin: 0 0 10px 0;"><span id="differenceOra">-</span></p>
+            <p style="margin: 0 0 5px 0;"><strong>Pihenőnap órák:</strong> <span id="restDayHours">0 óra</span></p>
+            <p style="margin: 0 0 5px 0;"><strong>Szabadnap órák:</strong> <span id="freeDayHours">0 óra</span></p>
+            <p style="margin: 0 0 10px 0;"><strong>Ünnepnap órák:</strong> <span id="holidayHours">0 óra</span></p>
+            <button id="recalculateButton" style="padding: 5px 10px; background-color: #4CAF50; color: white; border: none; border-radius: 3px; cursor: pointer;">Újraszámolás</button>
+        `;
+        document.body.appendChild(resultDiv);
+
+        // Újraszámolás gomb eseménykezelő
+        document.getElementById('recalculateButton').addEventListener('click', calculateWorkHours);
+    }
+
+    // Kezdeti div létrehozása és számítás
+    createResultDiv();
+    setTimeout(calculateWorkHours, 1000);
+
+    // MutationObserver a dinamikus tartalomváltozások figyeléséhez
+    const observer = new MutationObserver((mutations) => {
+        mutations.forEach((mutation) => {
+            if (mutation.type === 'childList' && mutation.target.id === 'form:workingTimeDays_data') {
+                calculateWorkHours();
+            }
+        });
+    });
+
+    // Az observer konfigurálása és indítása
+    const config = { childList: true, subtree: true };
+    const targetNode = document.getElementById('form:workingTimeDays_data');
+    if (targetNode) {
+        observer.observe(targetNode, config);
+    }
+
+    // Eseményfigyelő hozzáadása a hónap választó gombokhoz
+    document.querySelectorAll('#form\\:month input[type="radio"]').forEach(radio => {
+        radio.addEventListener('change', () => {
+            setTimeout(calculateWorkHours, 1000);
+        });
+    });
+})();
