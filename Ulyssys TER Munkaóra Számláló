@@ -1,14 +1,16 @@
 // ==UserScript==
-// @name         Ulyssys TER Munkaóra Számláló
+// @name         Ulyssys TER Munkaóra Számláló és Túlóra Kalkulátor
 // @namespace    http://tampermonkey.net/
-// @version      1.6
-// @description  Megszámolja a munkanapokat és kiszámolja a ledolgozandó és könyvelt munkaórákat az Ulyssys TER rendszerben
+// @version      1.7
+// @description  Megszámolja a munkanapokat, kiszámolja a ledolgozandó és könyvelt munkaórákat, valamint a túlóra összegét az Ulyssys TER rendszerben
 // @match        https://ter.ulyssys.hu/ter/wt/wtown
 // @grant        none
 // ==/UserScript==
 
 (function() {
     'use strict';
+
+    let hourlyRate = 1; // Alapértelmezett óradíj
 
     function calculateWorkHours() {
         // Munkanapok számolása
@@ -65,6 +67,10 @@
             resultDiv.querySelector('#restDayHours').textContent = `${restDayHours.toFixed(2)} óra`;
             resultDiv.querySelector('#freeDayHours').textContent = `${freeDayHours.toFixed(2)} óra`;
             resultDiv.querySelector('#holidayHours').textContent = `${holidayHours.toFixed(2)} óra`;
+
+            // Túlóra összeg számítása és megjelenítése
+            const overtimeAmount = Math.max(0, difference) * hourlyRate;
+            resultDiv.querySelector('#overtimeAmount').textContent = `${overtimeAmount.toFixed(0)} HUF`;
         }
     }
 
@@ -79,12 +85,36 @@
             <p style="margin: 0 0 5px 0;"><strong>Pihenőnap órák:</strong> <span id="restDayHours">0 óra</span></p>
             <p style="margin: 0 0 5px 0;"><strong>Szabadnap órák:</strong> <span id="freeDayHours">0 óra</span></p>
             <p style="margin: 0 0 10px 0;"><strong>Ünnepnap órák:</strong> <span id="holidayHours">0 óra</span></p>
-            <button id="recalculateButton" style="padding: 5px 10px; background-color: #4CAF50; color: white; border: none; border-radius: 3px; cursor: pointer;">Újraszámolás</button>
+            <button id="recalculateButton" style="padding: 5px 10px; background-color: #4CAF50; color: white; border: none; border-radius: 3px; cursor: pointer; margin-right: 10px;">Újraszámolás</button>
+            <button id="showOvertimeButton" style="padding: 5px 10px; background-color: #008CBA; color: white; border: none; border-radius: 3px; cursor: pointer;">Mutasd a túlóra összeget</button>
+            <div id="overtimeDetails" style="display: none; margin-top: 10px;">
+                <p><strong>Túlóra összeg:</strong> <span id="overtimeAmount">0 HUF</span></p>
+                <label for="hourlyRateInput">Óradíj (HUF):</label>
+                <input type="number" id="hourlyRateInput" value="${hourlyRate}" style="width: 80px; margin-left: 5px;">
+                <button id="updateHourlyRateButton" style="padding: 2px 5px; background-color: #4CAF50; color: white; border: none; border-radius: 3px; cursor: pointer; margin-left: 5px;">Frissítés</button>
+            </div>
         `;
         document.body.appendChild(resultDiv);
 
         // Újraszámolás gomb eseménykezelő
         document.getElementById('recalculateButton').addEventListener('click', calculateWorkHours);
+
+        // Túlóra összeg megjelenítése gomb eseménykezelő
+        document.getElementById('showOvertimeButton').addEventListener('click', function() {
+            const overtimeDetails = document.getElementById('overtimeDetails');
+            overtimeDetails.style.display = overtimeDetails.style.display === 'none' ? 'block' : 'none';
+        });
+
+        // Óradíj frissítése gomb eseménykezelő
+        document.getElementById('updateHourlyRateButton').addEventListener('click', function() {
+            const newHourlyRate = parseFloat(document.getElementById('hourlyRateInput').value);
+            if (!isNaN(newHourlyRate) && newHourlyRate > 0) {
+                hourlyRate = newHourlyRate;
+                calculateWorkHours();
+            } else {
+                alert('Kérem, adjon meg egy érvényes pozitív számot az óradíjhoz!');
+            }
+        });
     }
 
     // Kezdeti div létrehozása és számítás
