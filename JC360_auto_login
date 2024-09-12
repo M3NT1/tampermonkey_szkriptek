@@ -1,9 +1,12 @@
 // ==UserScript==
-// @name         JC360 Auto Login
+// @name         JC360 Auto Login and Redirect (Enhanced)
 // @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  Automatically fills in login credentials and submits the form on JC360 login page
+// @version      1.5
+// @description  Automatically fills in login credentials, submits the form on JC360 login page, and redirects to the correct ModifyWorkTime page
 // @match        https://jc360.alig.hu/Login/
+// @match        https://jc360.alig.hu/login/
+// @match        https://jc360.alig.hu/
+// @match        https://jc360.alig.hu/UserCenter/Users/ModifyWorkTime.aspx?UserGroupId=4
 // @grant        none
 // ==/UserScript==
 
@@ -12,32 +15,99 @@
 
     // Konfiguráció: Állítsd be a saját bejelentkezési adataidat
     const config = {
-        email: 'azonosító vagy e-mail kell ide',
-        password: 'jelszó kell ide'
+        email: 'your_email_or_username',
+        password: 'your_password',
+        redirectUrl: 'https://jc360.alig.hu/UserCenter/Users/ModifyWorkTime.aspx?UserId=226'
     };
 
     // Funkció a bejelentkezési űrlap kitöltésére és elküldésére
     function autoLogin() {
-        // Ellenőrizzük, hogy a bejelentkezési űrlap elemei megjelentek-e
-        const emailField = document.getElementById('email');
-        const passwordField = document.getElementById('password');
-        const loginButton = document.getElementById('btnJCLogin');
+        const emailField = document.querySelector('input[name="email"], #email');
+        const passwordField = document.querySelector('input[name="password"], #password');
+        const loginButton = document.querySelector('button[name="ctl00$ctl00$body$ContentPlaceHolder1$btnJCLogin"], #btnJCLogin');
 
         if (emailField && passwordField && loginButton) {
-            // Kitöltjük a mezőket
+            console.log('Mezők megtalálva, kitöltés...');
+
+            // Közvetlenül állítsuk be az értékeket
             emailField.value = config.email;
             passwordField.value = config.password;
 
-            // Rövid késleltetés után elküldjük az űrlapot
+            // Használjunk Object.defineProperty-t az érték beállításához
+            Object.defineProperty(emailField, 'value', {
+                writable: true,
+                value: config.email
+            });
+            Object.defineProperty(passwordField, 'value', {
+                writable: true,
+                value: config.password
+            });
+
+            // Esemény kiváltása a mezők kitöltése után
+            ['input', 'change', 'blur'].forEach(eventType => {
+                emailField.dispatchEvent(new Event(eventType, { bubbles: true }));
+                passwordField.dispatchEvent(new Event(eventType, { bubbles: true }));
+            });
+
             setTimeout(() => {
+                console.log('Bejelentkezés gomb kattintása...');
                 loginButton.click();
-            }, 500);
+            }, 1000);
         } else {
-            // Ha az elemek még nem töltődtek be, próbáljuk újra egy kis idő múlva
-            setTimeout(autoLogin, 500);
+            console.log('Mezők nem találhatók, újrapróbálkozás...');
+            setTimeout(autoLogin, 1000);
         }
     }
 
-    // Indítsuk el az automatikus bejelentkezést
-    autoLogin();
+    // Funkció az átirányításhoz
+    function redirectToCorrectPage() {
+        console.log('Átirányítás a helyes oldalra...');
+        window.location.href = config.redirectUrl;
+    }
+
+    // Funkció a DOM változásainak figyelésére
+    function observeDOM() {
+        const targetNode = document.body;
+        const config = { childList: true, subtree: true };
+
+        const callback = function(mutationsList, observer) {
+            for(let mutation of mutationsList) {
+                if (mutation.type === 'childList') {
+                    const emailField = document.querySelector('input[name="email"], #email');
+                    if (emailField) {
+                        console.log('Login form detected, starting auto-login...');
+                        observer.disconnect();
+                        setTimeout(autoLogin, 500); // Kis késleltetés hozzáadva
+                        return;
+                    }
+                }
+            }
+        };
+
+        const observer = new MutationObserver(callback);
+        observer.observe(targetNode, config);
+    }
+
+    // Funkció a szkript többszöri futtatásához
+    function attemptLogin() {
+        if (document.readyState === 'complete') {
+            observeDOM();
+            autoLogin();
+        } else {
+            setTimeout(attemptLogin, 1000);
+        }
+    }
+
+    // Az aktuális oldal URL-je alapján döntjük el, mit csináljunk
+    const currentUrl = window.location.href.toLowerCase();
+
+    if (currentUrl.includes('/login/')) {
+        console.log('Bejelentkezési oldal detektálva, login kísérlet indítása...');
+        attemptLogin();
+    } else if (currentUrl === 'https://jc360.alig.hu/') {
+        console.log('Főoldal detektálva, várakozás az átirányításra...');
+    } else if (currentUrl.includes('/usercenter/users/modifyworktime.aspx?usergroupid=4')) {
+        console.log('Helytelen ModifyWorkTime oldal detektálva, átirányítás...');
+        redirectToCorrectPage();
+    }
 })();
