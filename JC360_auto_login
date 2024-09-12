@@ -1,0 +1,43 @@
+// ==UserScript==
+// @name         JC360 Auto Login
+// @namespace    http://tampermonkey.net/
+// @version      1.0
+// @description  Automatically fills in login credentials and submits the form on JC360 login page
+// @match        https://jc360.alig.hu/Login/
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // Konfiguráció: Állítsd be a saját bejelentkezési adataidat
+    const config = {
+        email: 'azonosító vagy e-mail kell ide',
+        password: 'jelszó kell ide'
+    };
+
+    // Funkció a bejelentkezési űrlap kitöltésére és elküldésére
+    function autoLogin() {
+        // Ellenőrizzük, hogy a bejelentkezési űrlap elemei megjelentek-e
+        const emailField = document.getElementById('email');
+        const passwordField = document.getElementById('password');
+        const loginButton = document.getElementById('btnJCLogin');
+
+        if (emailField && passwordField && loginButton) {
+            // Kitöltjük a mezőket
+            emailField.value = config.email;
+            passwordField.value = config.password;
+
+            // Rövid késleltetés után elküldjük az űrlapot
+            setTimeout(() => {
+                loginButton.click();
+            }, 500);
+        } else {
+            // Ha az elemek még nem töltődtek be, próbáljuk újra egy kis idő múlva
+            setTimeout(autoLogin, 500);
+        }
+    }
+
+    // Indítsuk el az automatikus bejelentkezést
+    autoLogin();
+})();
