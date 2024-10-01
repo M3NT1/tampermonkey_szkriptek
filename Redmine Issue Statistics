@@ -1,0 +1,115 @@
+// ==UserScript==
+// @name         Redmine Issue Statistics
+// @namespace    http://tampermonkey.net/
+// @version      0.4
+// @description  Display sorted statistics for open Redmine issues including status and total count
+// @match        https://projekt.nak.hu/projects/nak_projekt-saphkq/issues*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    const priorityOrder = ['Azonnali', 'Sürgős', 'Magas', 'Normal', 'Alacsony'];
+    const bugClassOrder = ['A - Végzetes', 'B - Súlyos', 'C - Jelentős', 'D - Egyéb'];
+
+    function createStatistics() {
+        const issues = document.querySelectorAll('table.issues tr.issue');
+        const stats = {};
+        let totalCount = 0;
+
+        issues.forEach(issue => {
+            const priority = issue.querySelector('td.priority').textContent.trim();
+            const bugClass = issue.querySelector('td.cf_283').textContent.trim();
+            const status = issue.querySelector('td.status').textContent.trim();
+
+            if (status !== 'Lezárva') {
+                if (!stats[priority]) {
+                    stats[priority] = {};
+                }
+                if (!stats[priority][bugClass]) {
+                    stats[priority][bugClass] = {};
+                }
+                if (!stats[priority][bugClass][status]) {
+                    stats[priority][bugClass][status] = 0;
+                }
+                stats[priority][bugClass][status]++;
+                totalCount++;
+            }
+        });
+
+        return { stats, totalCount };
+    }
+
+    function displayStatistics(stats, totalCount) {
+        const sidebar = document.getElementById('sidebar');
+        const tasksHeader = sidebar.querySelector('h3');
+
+        const statsDiv = document.createElement('div');
+        statsDiv.id = 'issue-statistics';
+        statsDiv.style.marginBottom = '20px';
+
+        const statsHeader = document.createElement('h3');
+        statsHeader.textContent = 'Statisztika';
+        statsDiv.appendChild(statsHeader);
+
+        const table = document.createElement('table');
+        table.style.width = '100%';
+        table.style.borderCollapse = 'collapse';
+        table.style.fontSize = '12px';
+
+        const headerRow = table.insertRow();
+        ['Prioritás', 'Hiba osztály', 'Státusz', 'Darabszám'].forEach(text => {
+            const th = document.createElement('th');
+            th.textContent = text;
+            th.style.border = '1px solid #ccc';
+            th.style.padding = '5px';
+            headerRow.appendChild(th);
+        });
+
+        // Sort and display statistics
+        priorityOrder.forEach(priority => {
+            if (stats[priority]) {
+                bugClassOrder.forEach(bugClass => {
+                    if (stats[priority][bugClass]) {
+                        Object.keys(stats[priority][bugClass]).sort().forEach(status => {
+                            const count = stats[priority][bugClass][status];
+                            const row = table.insertRow();
+                            [priority, bugClass, status, count].forEach(text => {
+                                const cell = row.insertCell();
+                                cell.textContent = text;
+                                cell.style.border = '1px solid #ccc';
+                                cell.style.padding = '5px';
+                            });
+                        });
+                    }
+                });
+            }
+        });
+
+        // Add total count row
+        const totalRow = table.insertRow();
+        totalRow.style.fontWeight = 'bold';
+        const totalCell = totalRow.insertCell();
+        totalCell.colSpan = 3;
+        totalCell.textContent = 'Összesen:';
+        totalCell.style.border = '1px solid #ccc';
+        totalCell.style.padding = '5px';
+        totalCell.style.textAlign = 'right';
+        const totalCountCell = totalRow.insertCell();
+        totalCountCell.textContent = totalCount;
+        totalCountCell.style.border = '1px solid #ccc';
+        totalCountCell.style.padding = '5px';
+
+        statsDiv.appendChild(table);
+        sidebar.insertBefore(statsDiv, tasksHeader);
+    }
+
+    function init() {
+        const { stats, totalCount } = createStatistics();
+        displayStatistics(stats, totalCount);
+    }
+
+    // Run the script after a short delay to ensure the page is fully loaded
+    setTimeout(init, 1000);
+})();
