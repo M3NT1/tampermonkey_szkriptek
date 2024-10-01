@@ -1,0 +1,39 @@
+// ==UserScript==
+// @name         Redmine Row Highlighter
+// @namespace    http://tampermonkey.net/
+// @version      0.1
+// @description  Highlight rows with empty "Szállítói jegy [EKK]" column
+// @match        https://projekt.nak.hu/projects/nak_projekt-saphkq/issues*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    function highlightEmptyRows() {
+        const table = document.querySelector('table.list.issues');
+        if (!table) return;
+
+        const rows = table.querySelectorAll('tr.issue');
+        const supplierTicketColumnIndex = Array.from(table.querySelectorAll('th')).findIndex(th => th.textContent.trim() === 'Szállítói jegy [EKK]');
+
+        if (supplierTicketColumnIndex === -1) return;
+
+        rows.forEach(row => {
+            const cells = row.querySelectorAll('td');
+            if (cells.length > supplierTicketColumnIndex) {
+                const supplierTicketCell = cells[supplierTicketColumnIndex];
+                if (supplierTicketCell.textContent.trim() === '') {
+                    row.style.backgroundColor = 'yellow';
+                }
+            }
+        });
+    }
+
+    // Run the function when the page loads
+    highlightEmptyRows();
+
+    // Watch for changes in the DOM and re-run the function
+    const observer = new MutationObserver(highlightEmptyRows);
+    observer.observe(document.body, { childList: true, subtree: true });
+})();
