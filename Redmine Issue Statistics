@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Redmine Issue Statistics
 // @namespace    http://tampermonkey.net/
-// @version      0.4
-// @description  Display sorted statistics for open Redmine issues including status and total count
+// @version      0.5
+// @description  Display sorted statistics for open Redmine issues excluding closed, rejected, and non-bug issues
 // @match        https://projekt.nak.hu/projects/nak_projekt-saphkq/issues*
 // @grant        none
 // ==/UserScript==
@@ -12,6 +12,7 @@
 
     const priorityOrder = ['Azonnali', 'Sürgős', 'Magas', 'Normal', 'Alacsony'];
     const bugClassOrder = ['A - Végzetes', 'B - Súlyos', 'C - Jelentős', 'D - Egyéb'];
+    const excludedStatuses = ['Lezárva', 'Elutasítva', 'Nem hiba'];
 
     function createStatistics() {
         const issues = document.querySelectorAll('table.issues tr.issue');
@@ -23,7 +24,7 @@
             const bugClass = issue.querySelector('td.cf_283').textContent.trim();
             const status = issue.querySelector('td.status').textContent.trim();
 
-            if (status !== 'Lezárva') {
+            if (!excludedStatuses.includes(status)) {
                 if (!stats[priority]) {
                     stats[priority] = {};
                 }
