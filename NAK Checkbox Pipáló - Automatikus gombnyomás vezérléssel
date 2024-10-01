@@ -1,0 +1,94 @@
+// ==UserScript==
+// @name         NAK Checkbox Pipáló - Automatikus gombnyomás vezérléssel
+// @namespace    http://tampermonkey.net/
+// @version      2.0
+// @description  Automatikusan bepipálja az összes checkbox-ot a NAK rendszerben, szimulálva a gombnyomásokat, vezérlő gombbal
+// @match        https://iroda.ekozig.nak.hu/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    let isProcessing = false;
+    let intervalId;
+
+    function waitForElement(selector, callback) {
+        if (document.querySelector(selector)) {
+            callback();
+        } else {
+            setTimeout(() => waitForElement(selector, callback), 100);
+        }
+    }
+
+    function findCheckboxes() {
+        return Array.from(document.querySelectorAll('input[type="checkbox"][id$="_input_input"]:not([id$="dws_select_all_checkbox_input"])'));
+    }
+
+    function clickCheckbox(checkbox) {
+        if (!checkbox.checked) {
+            checkbox.click();
+            return true;
+        }
+        return false;
+    }
+
+    async function processCheckboxes() {
+        if (isProcessing) return;
+        isProcessing = true;
+
+        const checkboxes = findCheckboxes();
+        console.log(`Talált checkbox-ok száma: ${checkboxes.length}`);
+
+        for (let checkbox of checkboxes) {
+            if (clickCheckbox(checkbox)) {
+                console.log(`Checkbox bejelölve: ${checkbox.id}`);
+                await new Promise(resolve => setTimeout(resolve, 100)); // Várunk 500ms-t minden kattintás után
+            }
+        }
+
+        console.log('Minden checkbox feldolgozva');
+        isProcessing = false;
+    }
+
+    function addButton() {
+        const button = document.createElement('button');
+        button.textContent = 'Összes kijelölése';
+        button.style.position = 'fixed';
+        button.style.top = '10px';
+        button.style.right = '10px';
+        button.style.zIndex = '9999';
+        button.addEventListener('click', processCheckboxes);
+        document.body.appendChild(button);
+
+        const controlButton = document.createElement('button');
+        controlButton.textContent = 'Automatikus kijelölés indítása';
+        controlButton.style.position = 'fixed';
+        controlButton.style.top = '50px';
+        controlButton.style.right = '10px';
+        controlButton.style.zIndex = '9999';
+        controlButton.addEventListener('click', () => {
+            if (intervalId) {
+                clearInterval(intervalId);
+                intervalId = null;
+                controlButton.textContent = 'Automatikus kijelölés indítása';
+                console.log('Automatikus kijelölés leállítva');
+            } else {
+                intervalId = setInterval(() => {
+                    if (!isProcessing) {
+                        button.click();
+                    }
+                }, 500);
+                controlButton.textContent = 'Automatikus kijelölés leállítása';
+                console.log('Automatikus kijelölés elindítva');
+            }
+        });
+        document.body.appendChild(controlButton);
+    }
+
+    // Várunk, amíg a táblázat betöltődik
+    waitForElement('#kepviseletKarbantartoForm\\:kepviseletKarbantartoMainPanelId\\:mainTabView\\:kepviseletPanelId\\:kepviseletPanelId_table_data', () => {
+        console.log('Táblázat megtalálva, gomb hozzáadása...');
+        addButton();
+    });
+})();
