@@ -1,0 +1,222 @@
+// ==UserScript==
+// @name         JIRA Assistant Worklog Indicator with Custom Settings
+// @namespace    http://tampermonkey.net/
+// @version      1.7
+// @description  Színezi a log indicatort egyéni beállításokkal és munkarendekkel, minimalizálható panellel
+// @match        https://app.jiraassistant.com/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    let controlsDiv;
+    let minimizeButton;
+    let isMinimized = false;
+    let settings = JSON.parse(localStorage.getItem('jiraAssistantSettings')) || {
+        defaultWorkHours: 8,
+        greenThreshold: 90,
+        yellowThreshold: 80,
+        persons: {}
+    };
+
+    // Funkció a log indicator színezésére
+    function colorLogIndicator(cell, workHours) {
+        const logValue = parseFloat(cell.textContent) || 0;
+        const indicator = cell.querySelector('.log-indicator .prog-bar');
+
+        if (indicator) {
+            const percentage = (logValue / workHours) * 100;
+            if (percentage >= settings.greenThreshold) {
+                indicator.style.backgroundColor = 'green';
+            } else if (percentage >= settings.yellowThreshold) {
+                indicator.style.backgroundColor = 'yellow';
+            } else {
+                indicator.style.backgroundColor = 'red';
+            }
+        }
+    }
+
+    // Funkció a beállítások mentésére
+    function saveSettings() {
+        localStorage.setItem('jiraAssistantSettings', JSON.stringify(settings));
+    }
+
+    // Funkció a panel minimalizálásához és visszaállításához
+    function toggleMinimize() {
+        const content = controlsDiv.querySelector('.controls-content');
+        if (isMinimized) {
+            content.style.display = 'block';
+            minimizeButton.textContent = '−';
+            controlsDiv.style.height = 'auto';
+            controlsDiv.style.width = 'auto';
+        } else {
+            content.style.display = 'none';
+            minimizeButton.textContent = '+';
+            controlsDiv.style.height = '30px';
+            controlsDiv.style.width = '30px';
+        }
+        isMinimized = !isMinimized;
+    }
+
+    // Funkció az egyéni munkaórák beállításához és a frissítő gomb hozzáadásához
+    function addControls() {
+        if (controlsDiv) {
+            document.body.removeChild(controlsDiv);
+        }
+
+        controlsDiv = document.createElement('div');
+        controlsDiv.style.position = 'fixed';
+        controlsDiv.style.top = '10px';
+        controlsDiv.style.left = '10px';
+        controlsDiv.style.zIndex = '9999';
+        controlsDiv.style.backgroundColor = 'white';
+        controlsDiv.style.padding = '10px';
+        controlsDiv.style.border = '1px solid black';
+        controlsDiv.style.maxHeight = '80vh';
+        controlsDiv.style.overflowY = 'auto';
+
+        minimizeButton = document.createElement('button');
+        minimizeButton.textContent = '−';
+        minimizeButton.style.position = 'absolute';
+        minimizeButton.style.top = '5px';
+        minimizeButton.style.right = '5px';
+        minimizeButton.style.width = '20px';
+        minimizeButton.style.height = '20px';
+        minimizeButton.style.lineHeight = '1';
+        minimizeButton.style.padding = '0';
+        minimizeButton.addEventListener('click', toggleMinimize);
+
+        const contentDiv = document.createElement('div');
+        contentDiv.classList.add('controls-content');
+
+        const defaultWorkHoursInput = createInput('Alapértelmezett munkaórák:', settings.defaultWorkHours, (value) => {
+            settings.defaultWorkHours = parseFloat(value);
+            saveSettings();
+            refreshColors();
+        });
+
+        const greenThresholdInput = createInput('Zöld küszöb (%):', settings.greenThreshold, (value) => {
+            settings.greenThreshold = parseFloat(value);
+            saveSettings();
+            refreshColors();
+        });
+
+        const yellowThresholdInput = createInput('Sárga küszöb (%):', settings.yellowThreshold, (value) => {
+            settings.yellowThreshold = parseFloat(value);
+            saveSettings();
+            refreshColors();
+        });
+
+        const refreshButton = document.createElement('button');
+        refreshButton.textContent = 'Frissítés';
+        refreshButton.style.marginTop = '10px';
+        refreshButton.addEventListener('click', () => {
+            collectPersons();
+            refreshColors();
+        });
+
+        contentDiv.appendChild(defaultWorkHoursInput);
+        contentDiv.appendChild(greenThresholdInput);
+        contentDiv.appendChild(yellowThresholdInput);
+        contentDiv.appendChild(refreshButton);
+
+        controlsDiv.appendChild(minimizeButton);
+        controlsDiv.appendChild(contentDiv);
+
+        document.body.appendChild(controlsDiv);
+    }
+
+    // Segédfüggvény input mező létrehozásához
+    function createInput(labelText, value, onChange) {
+        const container = document.createElement('div');
+        container.style.marginBottom = '5px';
+
+        const label = document.createElement('label');
+        label.textContent = labelText;
+
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.value = value;
+        input.style.marginLeft = '5px';
+        input.addEventListener('change', () => onChange(input.value));
+
+        container.appendChild(label);
+        container.appendChild(input);
+
+        return container;
+    }
+
+    // Funkció a személyek kigyűjtésére és egyéni beállítások hozzáadására
+    function collectPersons() {
+        const persons = {};
+        const rows = document.querySelectorAll('tr.pointer.auto-wrap[data-row-id="user"]');
+        rows.forEach(row => {
+            const nameElement = row.querySelector('.user-info-min .name');
+            if (nameElement) {
+                const name = nameElement.textContent.trim();
+                persons[name] = settings.persons[name] || settings.defaultWorkHours;
+            }
+        });
+
+        // Frissítjük a beállításokat az új személyekkel
+        settings.persons = persons;
+        saveSettings();
+
+        // Eltávolítjuk a régi személyes beállításokat
+        const oldPersonInputs = controlsDiv.querySelectorAll('.person-input');
+        oldPersonInputs.forEach(input => input.remove());
+
+        // Hozzáadjuk az egyéni beállításokat a vezérlőelemekhez
+        Object.keys(persons).forEach(name => {
+            const personInput = createInput(name + ' munkaórái:', persons[name], (value) => {
+                settings.persons[name] = parseFloat(value);
+                saveSettings();
+                refreshColors();
+            });
+            personInput.classList.add('person-input');
+            controlsDiv.querySelector('.controls-content').insertBefore(personInput, controlsDiv.querySelector('.controls-content').lastChild);
+        });
+
+        console.log('Kigyűjtött személyek:', Object.keys(persons));
+    }
+
+    // Funkció a színek frissítésére
+    function refreshColors() {
+        const rows = document.querySelectorAll('tr.pointer.auto-wrap[data-row-id="user"]');
+        rows.forEach(row => {
+            const nameElement = row.querySelector('.user-info-min .name');
+            if (nameElement) {
+                const name = nameElement.textContent.trim();
+                const workHours = settings.persons[name] || settings.defaultWorkHours;
+                const cells = row.querySelectorAll('.day-wl-block');
+                cells.forEach(cell => colorLogIndicator(cell, workHours));
+            }
+        });
+    }
+
+    // Fő funkció, amely elindítja a szkriptet
+    function init() {
+        addControls();
+        collectPersons();
+        refreshColors();
+    }
+
+    // Szkript indítása, amikor az oldal betöltődött
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+
+    // MutationObserver a dinamikus változások figyeléséhez
+    const observer = new MutationObserver((mutations) => {
+        mutations.forEach((mutation) => {
+            if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+                refreshColors();
+            }
+        });
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+})();
