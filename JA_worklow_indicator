@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         JIRA Assistant Worklog Indicator with Custom Settings
+// @name         JIRA Assistant Worklog Indicator with Custom Settings and Total Coloring
 // @namespace    http://tampermonkey.net/
-// @version      1.7
-// @description  Színezi a log indicatort egyéni beállításokkal és munkarendekkel, minimalizálható panellel
+// @version      1.9
+// @description  Színezi a log indicatort és a total mezőt egyéni beállításokkal és munkarendekkel
 // @match        https://app.jiraassistant.com/*
 // @grant        none
 // ==/UserScript==
@@ -27,14 +27,46 @@
 
         if (indicator) {
             const percentage = (logValue / workHours) * 100;
-            if (percentage >= settings.greenThreshold) {
-                indicator.style.backgroundColor = 'green';
-            } else if (percentage >= settings.yellowThreshold) {
-                indicator.style.backgroundColor = 'yellow';
-            } else {
-                indicator.style.backgroundColor = 'red';
-            }
+            indicator.style.backgroundColor = getColorForPercentage(percentage);
         }
+    }
+
+    // Funkció a total mező színezésére
+    function colorTotalField(row, name) {
+        const totalCell = row.querySelector('td[data-test-id="total"]');
+        if (!totalCell) return;
+
+        const totalHours = parseFloat(totalCell.textContent) || 0;
+        const workHoursPerDay = settings.persons[name] || settings.defaultWorkHours;
+        const workDays = countWorkDays(row);
+        const expectedTotalHours = workHoursPerDay * workDays;
+
+        const percentage = (totalHours / expectedTotalHours) * 100;
+
+        totalCell.style.backgroundColor = getColorForPercentage(percentage);
+    }
+
+    // Funkció a százalék alapján történő színmeghatározásra
+    function getColorForPercentage(percentage) {
+        if (percentage >= settings.greenThreshold) {
+            return 'green';
+        } else if (percentage >= settings.yellowThreshold) {
+            return 'yellow';
+        } else {
+            return 'red';
+        }
+    }
+
+    // Funkció a munkanapok számolására
+    function countWorkDays(row) {
+        const cells = row.querySelectorAll('.day-wl-block');
+        let workDays = 0;
+        cells.forEach(cell => {
+            if (!cell.classList.contains('col-holiday') && parseFloat(cell.textContent) > 0) {
+                workDays++;
+            }
+        });
+        return workDays;
     }
 
     // Funkció a beállítások mentésére
@@ -90,23 +122,9 @@
         const contentDiv = document.createElement('div');
         contentDiv.classList.add('controls-content');
 
-        const defaultWorkHoursInput = createInput('Alapértelmezett munkaórák:', settings.defaultWorkHours, (value) => {
-            settings.defaultWorkHours = parseFloat(value);
-            saveSettings();
-            refreshColors();
-        });
-
-        const greenThresholdInput = createInput('Zöld küszöb (%):', settings.greenThreshold, (value) => {
-            settings.greenThreshold = parseFloat(value);
-            saveSettings();
-            refreshColors();
-        });
-
-        const yellowThresholdInput = createInput('Sárga küszöb (%):', settings.yellowThreshold, (value) => {
-            settings.yellowThreshold = parseFloat(value);
-            saveSettings();
-            refreshColors();
-        });
+        const defaultWorkHoursInput = createInput('Alapértelmezett munkaórák:', 'defaultWorkHours', 8);
+        const greenThresholdInput = createInput('Zöld küszöb (%):', 'greenThreshold', 90);
+        const yellowThresholdInput = createInput('Sárga küszöb (%):', 'yellowThreshold', 80);
 
         const refreshButton = document.createElement('button');
         refreshButton.textContent = 'Frissítés';
@@ -128,7 +146,7 @@
     }
 
     // Segédfüggvény input mező létrehozásához
-    function createInput(labelText, value, onChange) {
+    function createInput(labelText, key, defaultValue) {
         const container = document.createElement('div');
         container.style.marginBottom = '5px';
 
@@ -137,14 +155,21 @@
 
         const input = document.createElement('input');
         input.type = 'number';
-        input.value = value;
+        input.value = settings[key] || defaultValue;
         input.style.marginLeft = '5px';
-        input.addEventListener('change', () => onChange(input.value));
+        input.addEventListener('change', () => updateSettings(key, input.value));
 
         container.appendChild(label);
         container.appendChild(input);
 
         return container;
+    }
+
+    // Funkció a beállítások frissítésére
+    function updateSettings(key, value) {
+        settings[key] = parseFloat(value);
+        saveSettings();
+        refreshColors();
     }
 
     // Funkció a személyek kigyűjtésére és egyéni beállítások hozzáadására
@@ -169,11 +194,7 @@
 
         // Hozzáadjuk az egyéni beállításokat a vezérlőelemekhez
         Object.keys(persons).forEach(name => {
-            const personInput = createInput(name + ' munkaórái:', persons[name], (value) => {
-                settings.persons[name] = parseFloat(value);
-                saveSettings();
-                refreshColors();
-            });
+            const personInput = createInput(name + ' munkaórái:', 'persons.' + name, settings.defaultWorkHours);
             personInput.classList.add('person-input');
             controlsDiv.querySelector('.controls-content').insertBefore(personInput, controlsDiv.querySelector('.controls-content').lastChild);
         });
@@ -191,6 +212,7 @@
                 const workHours = settings.persons[name] || settings.defaultWorkHours;
                 const cells = row.querySelectorAll('.day-wl-block');
                 cells.forEach(cell => colorLogIndicator(cell, workHours));
+                colorTotalField(row, name);
             }
         });
     }
