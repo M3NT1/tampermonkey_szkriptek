@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         JIRA Assistant Worklog Indicator with Custom Settings and Total Coloring
 // @namespace    http://tampermonkey.net/
-// @version      2.0
-// @description  Színezi a log indicatort és a total mezőt egyéni beállításokkal és munkarendekkel
+// @version      2.1
+// @description  Színezi a log indicatort és a total mezőt egyéni beállításokkal és munkarendekkel, tartós tárolással
 // @match        https://app.jiraassistant.com/*
 // @grant        none
 // ==/UserScript==
@@ -13,12 +13,27 @@
     let controlsDiv;
     let minimizeButton;
     let isMinimized = false;
-    let settings = JSON.parse(localStorage.getItem('jiraAssistantSettings')) || {
-        defaultWorkHours: 8,
-        greenThreshold: 90,
-        yellowThreshold: 80,
-        persons: {}
-    };
+    let settings = loadSettings();
+
+    // Funkció a beállítások betöltésére
+    function loadSettings() {
+        const savedSettings = localStorage.getItem('jiraAssistantSettings');
+        if (savedSettings) {
+            return JSON.parse(savedSettings);
+        } else {
+            return {
+                defaultWorkHours: 8,
+                greenThreshold: 90,
+                yellowThreshold: 80,
+                persons: {}
+            };
+        }
+    }
+
+    // Funkció a beállítások mentésére
+    function saveSettings() {
+        localStorage.setItem('jiraAssistantSettings', JSON.stringify(settings));
+    }
 
     // Funkció a log indicator színezésére
     function colorLogIndicator(cell, workHours) {
@@ -67,11 +82,6 @@
             }
         });
         return workDays;
-    }
-
-    // Funkció a beállítások mentésére
-    function saveSettings() {
-        localStorage.setItem('jiraAssistantSettings', JSON.stringify(settings));
     }
 
     // Funkció a panel minimalizálásához és visszaállításához
@@ -179,18 +189,18 @@
 
     // Funkció a személyek kigyűjtésére és egyéni beállítások hozzáadására
     function collectPersons() {
-        const persons = {};
+        const currentPersons = {};
         const rows = document.querySelectorAll('tr.pointer.auto-wrap[data-row-id="user"]');
         rows.forEach(row => {
             const nameElement = row.querySelector('.user-info-min .name');
             if (nameElement) {
                 const name = nameElement.textContent.trim();
-                persons[name] = settings.persons[name] || settings.defaultWorkHours;
+                currentPersons[name] = settings.persons[name] || settings.defaultWorkHours;
             }
         });
 
-        // Frissítjük a beállításokat az új személyekkel
-        settings.persons = persons;
+        // Frissítjük a beállításokat az új személyekkel, de megtartjuk a régieket is
+        settings.persons = { ...settings.persons, ...currentPersons };
         saveSettings();
 
         // Eltávolítjuk a régi személyes beállításokat
@@ -198,13 +208,13 @@
         oldPersonInputs.forEach(input => input.remove());
 
         // Hozzáadjuk az egyéni beállításokat a vezérlőelemekhez
-        Object.keys(persons).forEach(name => {
+        Object.keys(currentPersons).forEach(name => {
             const personInput = createInput(name + ' munkaórái:', 'persons.' + name, settings.defaultWorkHours);
             personInput.classList.add('person-input');
             controlsDiv.querySelector('.controls-content').insertBefore(personInput, controlsDiv.querySelector('.controls-content').lastChild);
         });
 
-        console.log('Kigyűjtött személyek:', Object.keys(persons));
+        console.log('Kigyűjtött személyek:', Object.keys(currentPersons));
     }
 
     // Funkció a színek frissítésére
