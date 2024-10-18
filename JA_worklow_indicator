@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JIRA Assistant Worklog Indicator with Custom Settings and Total Coloring
 // @namespace    http://tampermonkey.net/
-// @version      1.9
+// @version      2.0
 // @description  Színezi a log indicatort és a total mezőt egyéni beállításokkal és munkarendekkel
 // @match        https://app.jiraassistant.com/*
 // @grant        none
@@ -155,7 +155,7 @@
 
         const input = document.createElement('input');
         input.type = 'number';
-        input.value = settings[key] || defaultValue;
+        input.value = key.includes('.') ? settings.persons[key.split('.')[1]] || defaultValue : settings[key] || defaultValue;
         input.style.marginLeft = '5px';
         input.addEventListener('change', () => updateSettings(key, input.value));
 
@@ -167,7 +167,12 @@
 
     // Funkció a beállítások frissítésére
     function updateSettings(key, value) {
-        settings[key] = parseFloat(value);
+        if (key.includes('.')) {
+            const [category, name] = key.split('.');
+            settings[category][name] = parseFloat(value);
+        } else {
+            settings[key] = parseFloat(value);
+        }
         saveSettings();
         refreshColors();
     }
