@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         JIRA Assistant Worklog Indicator with Custom Settings and Total Coloring
 // @namespace    http://tampermonkey.net/
-// @version      2.1
-// @description  Színezi a log indicatort és a total mezőt egyéni beállításokkal és munkarendekkel, tartós tárolással
+// @version      2.2
+// @description  Színezi a log indicatort, a total mezőt és a piros napok hátterét egyéni beállításokkal és munkarendekkel, tartós tárolással
 // @match        https://app.jiraassistant.com/*
 // @grant        none
 // ==/UserScript==
@@ -42,7 +42,15 @@
 
         if (indicator) {
             const percentage = (logValue / workHours) * 100;
-            indicator.style.backgroundColor = getColorForPercentage(percentage);
+            const color = getColorForPercentage(percentage);
+            indicator.style.backgroundColor = color;
+
+            // Ha a szín piros, akkor a cella hátterét is pirosra színezzük
+            if (color === 'red') {
+                cell.style.backgroundColor = 'rgba(255, 0, 0, 0.2)'; // Halvány piros
+            } else {
+                cell.style.backgroundColor = ''; // Visszaállítjuk az eredeti háttérszínt
+            }
         }
     }
 
