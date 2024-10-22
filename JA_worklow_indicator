@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         JIRA Assistant Worklog Indicator with Custom Settings and Total Coloring
 // @namespace    http://tampermonkey.net/
-// @version      2.2
-// @description  Színezi a log indicatort, a total mezőt és a piros napok hátterét egyéni beállításokkal és munkarendekkel, tartós tárolással
+// @version      2.7
+// @description  Színezi a log indicatort és a total mezőt egyéni beállításokkal és munkarendekkel, tartós tárolással
 // @match        https://app.jiraassistant.com/*
 // @grant        none
 // ==/UserScript==
@@ -23,8 +23,8 @@
         } else {
             return {
                 defaultWorkHours: 8,
-                greenThreshold: 90,
-                yellowThreshold: 80,
+                defaultGreenThreshold: 90,
+                defaultYellowThreshold: 80,
                 persons: {}
             };
         }
@@ -33,24 +33,35 @@
     // Funkció a beállítások mentésére
     function saveSettings() {
         localStorage.setItem('jiraAssistantSettings', JSON.stringify(settings));
+        console.log('Mentett beállítások:', settings);
+    }
+
+    // Funkció a személyre szabott beállítások lekérésére
+    function getPersonSettings(name) {
+        if (typeof settings.persons[name] !== 'object') {
+            settings.persons[name] = {};
+        }
+        const personSettings = settings.persons[name];
+        const result = {
+            workHours: personSettings.workHours ?? settings.defaultWorkHours,
+            greenThreshold: personSettings.greenThreshold ?? settings.defaultGreenThreshold,
+            yellowThreshold: personSettings.yellowThreshold ?? settings.defaultYellowThreshold
+        };
+        console.log(`Beállítások ${name} számára:`, result);
+        return result;
     }
 
     // Funkció a log indicator színezésére
-    function colorLogIndicator(cell, workHours) {
+    function colorLogIndicator(cell, name) {
         const logValue = parseFloat(cell.textContent) || 0;
         const indicator = cell.querySelector('.log-indicator .prog-bar');
+        const { workHours } = getPersonSettings(name);
 
         if (indicator) {
             const percentage = (logValue / workHours) * 100;
-            const color = getColorForPercentage(percentage);
+            const color = getColorForPercentage(percentage, name);
+            console.log(`${name} napi log: ${logValue}/${workHours} óra, ${percentage}%, szín: ${color}`);
             indicator.style.backgroundColor = color;
-
-            // Ha a szín piros, akkor a cella hátterét is pirosra színezzük
-            if (color === 'red') {
-                cell.style.backgroundColor = 'rgba(255, 0, 0, 0.2)'; // Halvány piros
-            } else {
-                cell.style.backgroundColor = ''; // Visszaállítjuk az eredeti háttérszínt
-            }
         }
     }
 
@@ -60,20 +71,24 @@
         if (!totalCell) return;
 
         const totalHours = parseFloat(totalCell.textContent) || 0;
-        const workHoursPerDay = settings.persons[name] || settings.defaultWorkHours;
+        const { workHours } = getPersonSettings(name);
         const workDays = countWorkDays(row);
-        const expectedTotalHours = workHoursPerDay * workDays;
+        const expectedTotalHours = workHours * workDays;
 
         const percentage = (totalHours / expectedTotalHours) * 100;
+        const color = getColorForPercentage(percentage, name);
 
-        totalCell.style.backgroundColor = getColorForPercentage(percentage);
+        console.log(`${name} total: ${totalHours}/${expectedTotalHours} óra, ${percentage}%, szín: ${color}`);
+        totalCell.style.backgroundColor = color;
     }
 
     // Funkció a százalék alapján történő színmeghatározásra
-    function getColorForPercentage(percentage) {
-        if (percentage >= settings.greenThreshold) {
+    function getColorForPercentage(percentage, name) {
+        const { greenThreshold, yellowThreshold } = getPersonSettings(name);
+
+        if (percentage >= greenThreshold) {
             return 'green';
-        } else if (percentage >= settings.yellowThreshold) {
+        } else if (percentage >= yellowThreshold) {
             return 'yellow';
         } else {
             return 'red';
@@ -98,13 +113,13 @@
         if (isMinimized) {
             content.style.display = 'block';
             minimizeButton.textContent = '−';
-            controlsDiv.style.height = 'auto';
             controlsDiv.style.width = 'auto';
+            controlsDiv.style.height = 'auto';
         } else {
             content.style.display = 'none';
             minimizeButton.textContent = '+';
-            controlsDiv.style.height = '30px';
             controlsDiv.style.width = '30px';
+            controlsDiv.style.height = '30px';
         }
         isMinimized = !isMinimized;
     }
@@ -120,9 +135,11 @@
         controlsDiv.style.top = '10px';
         controlsDiv.style.left = '10px';
         controlsDiv.style.zIndex = '9999';
-        controlsDiv.style.backgroundColor = 'white';
-        controlsDiv.style.padding = '10px';
-        controlsDiv.style.border = '1px solid black';
+        controlsDiv.style.backgroundColor = '#f1fbff';
+        controlsDiv.style.border = '2px solid #a4b7c1';
+        controlsDiv.style.borderRadius = '20px';
+        controlsDiv.style.color = '#001';
+        controlsDiv.style.padding = '5px 8px 5px 12px';
         controlsDiv.style.maxHeight = '80vh';
         controlsDiv.style.overflowY = 'auto';
 
@@ -130,31 +147,41 @@
         minimizeButton.textContent = '−';
         minimizeButton.style.position = 'absolute';
         minimizeButton.style.top = '5px';
-        minimizeButton.style.right = '5px';
+        minimizeButton.style.left = '5px';
         minimizeButton.style.width = '20px';
         minimizeButton.style.height = '20px';
         minimizeButton.style.lineHeight = '1';
         minimizeButton.style.padding = '0';
+        minimizeButton.style.background = '#28a745';
+        minimizeButton.style.border = '1px solid #28a745';
+        minimizeButton.style.color = '#fff';
+        minimizeButton.style.borderRadius = '50%';
         minimizeButton.addEventListener('click', toggleMinimize);
 
         const contentDiv = document.createElement('div');
         contentDiv.classList.add('controls-content');
+        contentDiv.style.marginTop = '25px';
 
         const defaultWorkHoursInput = createInput('Alapértelmezett munkaórák:', 'defaultWorkHours', 8);
-        const greenThresholdInput = createInput('Zöld küszöb (%):', 'greenThreshold', 90);
-        const yellowThresholdInput = createInput('Sárga küszöb (%):', 'yellowThreshold', 80);
+        const defaultGreenThresholdInput = createInput('Alapértelmezett zöld küszöb (%):', 'defaultGreenThreshold', 90);
+        const defaultYellowThresholdInput = createInput('Alapértelmezett sárga küszöb (%):', 'defaultYellowThreshold', 80);
 
         const refreshButton = document.createElement('button');
         refreshButton.textContent = 'Frissítés';
         refreshButton.style.marginTop = '10px';
+        refreshButton.style.background = '#28a745';
+        refreshButton.style.border = '1px solid #28a745';
+        refreshButton.style.color = '#fff';
+        refreshButton.style.padding = '5px 10px';
+        refreshButton.style.borderRadius = '5px';
         refreshButton.addEventListener('click', () => {
             collectPersons();
             refreshColors();
         });
 
         contentDiv.appendChild(defaultWorkHoursInput);
-        contentDiv.appendChild(greenThresholdInput);
-        contentDiv.appendChild(yellowThresholdInput);
+        contentDiv.appendChild(defaultGreenThresholdInput);
+        contentDiv.appendChild(defaultYellowThresholdInput);
         contentDiv.appendChild(refreshButton);
 
         controlsDiv.appendChild(minimizeButton);
@@ -173,8 +200,11 @@
 
         const input = document.createElement('input');
         input.type = 'number';
-        input.value = key.includes('.') ? settings.persons[key.split('.')[1]] || defaultValue : settings[key] || defaultValue;
+        input.value = key.includes('.') ?
+            (settings.persons[key.split('.')[1]]?.[key.split('.')[2]] ?? settings[key.split('.')[2]] ?? defaultValue) :
+            (settings[key] ?? defaultValue);
         input.style.marginLeft = '5px';
+        input.style.width = '50px';
         input.addEventListener('change', () => updateSettings(key, input.value));
 
         container.appendChild(label);
@@ -185,9 +215,13 @@
 
     // Funkció a beállítások frissítésére
     function updateSettings(key, value) {
+        console.log(`Beállítás frissítése: ${key} = ${value}`);
         if (key.includes('.')) {
-            const [category, name] = key.split('.');
-            settings[category][name] = parseFloat(value);
+            const [category, name, subKey] = key.split('.');
+            if (typeof settings[category][name] !== 'object') {
+                settings[category][name] = {};
+            }
+            settings[category][name][subKey] = parseFloat(value);
         } else {
             settings[key] = parseFloat(value);
         }
@@ -203,7 +237,10 @@
             const nameElement = row.querySelector('.user-info-min .name');
             if (nameElement) {
                 const name = nameElement.textContent.trim();
-                currentPersons[name] = settings.persons[name] || settings.defaultWorkHours;
+                if (typeof settings.persons[name] !== 'object') {
+                    settings.persons[name] = {};
+                }
+                currentPersons[name] = settings.persons[name];
             }
         });
 
@@ -217,9 +254,25 @@
 
         // Hozzáadjuk az egyéni beállításokat a vezérlőelemekhez
         Object.keys(currentPersons).forEach(name => {
-            const personInput = createInput(name + ' munkaórái:', 'persons.' + name, settings.defaultWorkHours);
-            personInput.classList.add('person-input');
-            controlsDiv.querySelector('.controls-content').insertBefore(personInput, controlsDiv.querySelector('.controls-content').lastChild);
+            const personContainer = document.createElement('div');
+            personContainer.classList.add('person-input');
+            personContainer.style.marginTop = '10px';
+            personContainer.style.borderTop = '1px solid #ccc';
+            personContainer.style.paddingTop = '10px';
+
+            const nameLabel = document.createElement('strong');
+            nameLabel.textContent = name;
+            personContainer.appendChild(nameLabel);
+
+            const workHoursInput = createInput('Munkaórák:', `persons.${name}.workHours`, settings.defaultWorkHours);
+            const greenThresholdInput = createInput('Zöld küszöb (%):', `persons.${name}.greenThreshold`, settings.defaultGreenThreshold);
+            const yellowThresholdInput = createInput('Sárga küszöb (%):', `persons.${name}.yellowThreshold`, settings.defaultYellowThreshold);
+
+            personContainer.appendChild(workHoursInput);
+            personContainer.appendChild(greenThresholdInput);
+            personContainer.appendChild(yellowThresholdInput);
+
+            controlsDiv.querySelector('.controls-content').insertBefore(personContainer, controlsDiv.querySelector('.controls-content').lastChild);
         });
 
         console.log('Kigyűjtött személyek:', Object.keys(currentPersons));
@@ -227,14 +280,15 @@
 
     // Funkció a színek frissítésére
     function refreshColors() {
+        console.log('Színek frissítése...');
         const rows = document.querySelectorAll('tr.pointer.auto-wrap[data-row-id="user"]');
         rows.forEach(row => {
             const nameElement = row.querySelector('.user-info-min .name');
             if (nameElement) {
                 const name = nameElement.textContent.trim();
-                const workHours = settings.persons[name] || settings.defaultWorkHours;
+                console.log(`Színezés: ${name}`);
                 const cells = row.querySelectorAll('.day-wl-block');
-                cells.forEach(cell => colorLogIndicator(cell, workHours));
+                cells.forEach(cell => colorLogIndicator(cell, name));
                 colorTotalField(row, name);
             }
         });
@@ -242,6 +296,7 @@
 
     // Fő funkció, amely elindítja a szkriptet
     function init() {
+        console.log('Szkript inicializálása...');
         addControls();
         collectPersons();
         refreshColors();
@@ -258,6 +313,7 @@
     const observer = new MutationObserver((mutations) => {
         mutations.forEach((mutation) => {
             if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+                console.log('DOM változás észlelve, színek frissítése...');
                 refreshColors();
             }
         });
