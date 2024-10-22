@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         JIRA Assistant Worklog Indicator with Custom Settings and Total Coloring
 // @namespace    http://tampermonkey.net/
-// @version      2.9
-// @description  Színezi a log indicatort és a total mezőt egyéni beállításokkal és munkarendekkel, tartós tárolással
+// @version      3.0
+// @description  Színezi a log indicatort és a total mezőt egyéni beállításokkal és munkarendekkel, tartós tárolással, export és import funkcióval
 // @match        https://app.jiraassistant.com/*
 // @grant        none
 // ==/UserScript==
@@ -56,7 +56,7 @@
         const logValue = parseFloat(cell.textContent) || 0;
         const indicator = cell.querySelector('.log-indicator .prog-bar');
         const { workHours } = getPersonSettings(name);
-        
+
         if (indicator) {
             const percentage = (logValue / workHours) * 100;
             const color = getColorForPercentage(percentage, name);
@@ -74,10 +74,10 @@
         const { workHours } = getPersonSettings(name);
         const workDays = countWorkDays(row);
         const expectedTotalHours = workHours * workDays;
-        
+
         const percentage = (totalHours / expectedTotalHours) * 100;
         const color = getColorForPercentage(percentage, name);
-        
+
         console.log(`${name} total: ${totalHours}/${expectedTotalHours} óra, ${percentage}%, szín: ${color}`);
         totalCell.style.backgroundColor = color;
     }
@@ -171,29 +171,41 @@
         const defaultGreenThresholdInput = createInput('Alapértelmezett zöld küszöb (%):', 'defaultGreenThreshold', 90);
         const defaultYellowThresholdInput = createInput('Alapértelmezett sárga küszöb (%):', 'defaultYellowThreshold', 80);
 
-        const refreshButton = document.createElement('button');
-        refreshButton.textContent = 'Frissítés';
-        refreshButton.style.marginTop = '10px';
-        refreshButton.style.background = '#28a745';
-        refreshButton.style.border = '1px solid #28a745';
-        refreshButton.style.color = '#fff';
-        refreshButton.style.padding = '5px 10px';
-        refreshButton.style.borderRadius = '5px';
-        refreshButton.style.cursor = 'pointer';
-        refreshButton.addEventListener('click', () => {
+        const refreshButton = createButton('Frissítés', () => {
             collectPersons();
             refreshColors();
         });
+
+        const exportButton = createButton('Export', exportSettings);
+        const importButton = createButton('Import', importSettings);
 
         contentDiv.appendChild(defaultWorkHoursInput);
         contentDiv.appendChild(defaultGreenThresholdInput);
         contentDiv.appendChild(defaultYellowThresholdInput);
         contentDiv.appendChild(refreshButton);
+        contentDiv.appendChild(exportButton);
+        contentDiv.appendChild(importButton);
 
         controlsDiv.appendChild(minimizeButton);
         controlsDiv.appendChild(contentDiv);
 
         document.body.appendChild(controlsDiv);
+    }
+
+    // Segédfüggvény gomb létrehozásához
+    function createButton(text, onClick) {
+        const button = document.createElement('button');
+        button.textContent = text;
+        button.style.marginTop = '10px';
+        button.style.marginRight = '5px';
+        button.style.background = '#28a745';
+        button.style.border = '1px solid #28a745';
+        button.style.color = '#fff';
+        button.style.padding = '5px 10px';
+        button.style.borderRadius = '5px';
+        button.style.cursor = 'pointer';
+        button.addEventListener('click', onClick);
+        return button;
     }
 
     // Segédfüggvény input mező létrehozásához
@@ -206,8 +218,8 @@
 
         const input = document.createElement('input');
         input.type = 'number';
-        input.value = key.includes('.') ? 
-            (settings.persons[key.split('.')[1]]?.[key.split('.')[2]] ?? settings[key.split('.')[2]] ?? defaultValue) : 
+        input.value = key.includes('.') ?
+            (settings.persons[key.split('.')[1]]?.[key.split('.')[2]] ?? settings[key.split('.')[2]] ?? defaultValue) :
             (settings[key] ?? defaultValue);
         input.style.marginLeft = '5px';
         input.style.width = '50px';
@@ -298,6 +310,44 @@
                 colorTotalField(row, name);
             }
         });
+    }
+
+    // Funkció a beállítások exportálásához
+    function exportSettings() {
+        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(settings));
+        const downloadAnchorNode = document.createElement('a');
+        downloadAnchorNode.setAttribute("href", dataStr);
+        downloadAnchorNode.setAttribute("download", "jira_assistant_settings.json");
+        document.body.appendChild(downloadAnchorNode);
+        downloadAnchorNode.click();
+        downloadAnchorNode.remove();
+    }
+
+    // Funkció a beállítások importálásához
+    function importSettings() {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'application/json';
+        input.onchange = function(event) {
+            const file = event.target.files[0];
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const importedSettings = JSON.parse(e.target.result);
+                    settings = importedSettings;
+                    saveSettings();
+                    addControls();
+                    collectPersons();
+                    refreshColors();
+                    alert('Beállítások sikeresen importálva!');
+                } catch (error) {
+                    console.error('Hiba történt az importálás során:', error);
+                    alert('Hiba történt az importálás során. Kérjük, ellenőrizze a fájl formátumát.');
+                }
+            };
+            reader.readAsText(file);
+        };
+        input.click();
     }
 
     // Fő funkció, amely elindítja a szkriptet
