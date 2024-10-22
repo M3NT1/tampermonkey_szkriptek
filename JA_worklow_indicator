@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JIRA Assistant Worklog Indicator with Custom Settings and Total Coloring
 // @namespace    http://tampermonkey.net/
-// @version      2.7
+// @version      2.9
 // @description  Színezi a log indicatort és a total mezőt egyéni beállításokkal és munkarendekkel, tartós tárolással
 // @match        https://app.jiraassistant.com/*
 // @grant        none
@@ -56,7 +56,7 @@
         const logValue = parseFloat(cell.textContent) || 0;
         const indicator = cell.querySelector('.log-indicator .prog-bar');
         const { workHours } = getPersonSettings(name);
-
+        
         if (indicator) {
             const percentage = (logValue / workHours) * 100;
             const color = getColorForPercentage(percentage, name);
@@ -74,10 +74,10 @@
         const { workHours } = getPersonSettings(name);
         const workDays = countWorkDays(row);
         const expectedTotalHours = workHours * workDays;
-
+        
         const percentage = (totalHours / expectedTotalHours) * 100;
         const color = getColorForPercentage(percentage, name);
-
+        
         console.log(`${name} total: ${totalHours}/${expectedTotalHours} óra, ${percentage}%, szín: ${color}`);
         totalCell.style.backgroundColor = color;
     }
@@ -146,16 +146,21 @@
         minimizeButton = document.createElement('button');
         minimizeButton.textContent = '−';
         minimizeButton.style.position = 'absolute';
-        minimizeButton.style.top = '5px';
-        minimizeButton.style.left = '5px';
+        minimizeButton.style.top = '3px';
+        minimizeButton.style.left = '3px';
         minimizeButton.style.width = '20px';
         minimizeButton.style.height = '20px';
-        minimizeButton.style.lineHeight = '1';
         minimizeButton.style.padding = '0';
         minimizeButton.style.background = '#28a745';
         minimizeButton.style.border = '1px solid #28a745';
         minimizeButton.style.color = '#fff';
         minimizeButton.style.borderRadius = '50%';
+        minimizeButton.style.fontSize = '16px';
+        minimizeButton.style.lineHeight = '1';
+        minimizeButton.style.display = 'flex';
+        minimizeButton.style.justifyContent = 'center';
+        minimizeButton.style.alignItems = 'center';
+        minimizeButton.style.cursor = 'pointer';
         minimizeButton.addEventListener('click', toggleMinimize);
 
         const contentDiv = document.createElement('div');
@@ -174,6 +179,7 @@
         refreshButton.style.color = '#fff';
         refreshButton.style.padding = '5px 10px';
         refreshButton.style.borderRadius = '5px';
+        refreshButton.style.cursor = 'pointer';
         refreshButton.addEventListener('click', () => {
             collectPersons();
             refreshColors();
@@ -200,8 +206,8 @@
 
         const input = document.createElement('input');
         input.type = 'number';
-        input.value = key.includes('.') ?
-            (settings.persons[key.split('.')[1]]?.[key.split('.')[2]] ?? settings[key.split('.')[2]] ?? defaultValue) :
+        input.value = key.includes('.') ? 
+            (settings.persons[key.split('.')[1]]?.[key.split('.')[2]] ?? settings[key.split('.')[2]] ?? defaultValue) : 
             (settings[key] ?? defaultValue);
         input.style.marginLeft = '5px';
         input.style.width = '50px';
