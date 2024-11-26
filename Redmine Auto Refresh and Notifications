@@ -4,7 +4,7 @@
 // @version      1.3
 // @description  Automatic refresh and notifications for Redmine with persistent settings and notification management
 // @author       M3NT1
-// @match        https://projekt.nak.hu/*
+// @match        https://projekt.nak.hu/*/issues*
 // @grant        none
 // ==/UserScript==
 
