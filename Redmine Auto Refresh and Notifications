@@ -1,0 +1,193 @@
+// ==UserScript==
+// @name         Redmine Auto Refresh and Notifications
+// @namespace    http://tampermonkey.net/
+// @version      1.0
+// @description  Automatic refresh and notifications for Redmine
+// @author       Your Name
+// @match        https://projekt.nak.hu/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // Stílusok hozzáadása
+    const style = document.createElement('style');
+    style.textContent = `
+        .notification-panel {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            max-width: 300px;
+            z-index: 9999;
+        }
+        .notification {
+            background: #fff;
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            animation: slideIn 0.5s ease-out;
+        }
+        .notification.success { border-left: 4px solid #28a745; }
+        .notification.warning { border-left: 4px solid #ffc107; }
+        .notification.error { border-left: 4px solid #dc3545; }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); }
+            to { transform: translateX(0); }
+        }
+
+        .auto-refresh-controls {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            background: #fff;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+    `;
+    document.head.appendChild(style);
+
+    let refreshInterval;
+    let lastUpdate = {};
+
+    // Értesítési panel létrehozása
+    function createNotificationPanel() {
+        const panel = document.createElement('div');
+        panel.className = 'notification-panel';
+        document.body.appendChild(panel);
+        return panel;
+    }
+
+    // Automatikus frissítés vezérlő létrehozása
+    function createRefreshControls() {
+        const controls = document.createElement('div');
+        controls.className = 'auto-refresh-controls';
+        controls.innerHTML = `
+            <label>
+                Auto frissítés:
+                <select id="refresh-interval">
+                    <option value="0">Ki</option>
+                    <option value="30">30 mp</option>
+                    <option value="60">1 perc</option>
+                    <option value="300">5 perc</option>
+                </select>
+            </label>
+            <div id="last-refresh">Utolsó frissítés: soha</div>
+        `;
+
+        document.body.appendChild(controls);
+
+        document.getElementById('refresh-interval').addEventListener('change', (e) => {
+            const interval = parseInt(e.target.value);
+            if (interval > 0) {
+                startAutoRefresh(interval);
+            } else {
+                stopAutoRefresh();
+            }
+        });
+    }
+
+    // Értesítés megjelenítése
+    function showNotification(message, type = 'success') {
+        const panel = document.querySelector('.notification-panel') || createNotificationPanel();
+
+        const notification = document.createElement('div');
+        notification.className = `notification ${type}`;
+        notification.textContent = message;
+
+        panel.appendChild(notification);
+
+        setTimeout(() => {
+            notification.style.opacity = '0';
+            setTimeout(() => notification.remove(), 500);
+        }, 5000);
+    }
+
+    // Automatikus frissítés indítása
+    function startAutoRefresh(seconds) {
+        stopAutoRefresh();
+        refreshInterval = setInterval(checkForUpdates, seconds * 1000);
+        updateLastRefreshTime();
+    }
+
+    // Automatikus frissítés leállítása
+    function stopAutoRefresh() {
+        if (refreshInterval) {
+            clearInterval(refreshInterval);
+            refreshInterval = null;
+        }
+    }
+
+    // Frissítési idő frissítése
+    function updateLastRefreshTime() {
+        const lastRefreshElement = document.getElementById('last-refresh');
+        if (lastRefreshElement) {
+            lastRefreshElement.textContent = `Utolsó frissítés: ${new Date().toLocaleTimeString()}`;
+        }
+    }
+
+    // Változások ellenőrzése
+    function checkForUpdates() {
+        fetch(window.location.href)
+            .then(response => response.text())
+            .then(html => {
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+
+                // Issue változások ellenőrzése
+                if (window.location.pathname.includes('/issues')) {
+                    checkIssueChanges(doc);
+                }
+
+                updateLastRefreshTime();
+            });
+    }
+
+    // Issue változások ellenőrzése
+    function checkIssueChanges(newDoc) {
+        const currentIssues = Array.from(document.querySelectorAll('tr.issue')).map(row => ({
+            id: row.getAttribute('id'),
+            status: row.querySelector('td.status')?.textContent,
+            priority: row.querySelector('td.priority')?.textContent
+        }));
+
+        const newIssues = Array.from(newDoc.querySelectorAll('tr.issue')).map(row => ({
+            id: row.getAttribute('id'),
+            status: row.querySelector('td.status')?.textContent,
+            priority: row.querySelector('td.priority')?.textContent
+        }));
+
+        // Változások keresése
+        currentIssues.forEach(current => {
+            const newIssue = newIssues.find(issue => issue.id === current.id);
+            if (newIssue) {
+                if (newIssue.status !== current.status) {
+                    showNotification(`Státusz változás: ${current.id} - ${newIssue.status}`, 'warning');
+                }
+                if (newIssue.priority !== current.priority) {
+                    showNotification(`Prioritás változás: ${current.id} - ${newIssue.priority}`, 'warning');
+                }
+            }
+        });
+
+        // Új issue-k keresése
+        const newIssueIds = newIssues.map(issue => issue.id);
+        const currentIssueIds = currentIssues.map(issue => issue.id);
+        const addedIssues = newIssueIds.filter(id => !currentIssueIds.includes(id));
+
+        if (addedIssues.length > 0) {
+            showNotification(`${addedIssues.length} új feladat érkezett`, 'success');
+            window.location.reload();
+        }
+    }
+
+    // Szkript inicializálása
+    createRefreshControls();
+
+    // Kezdeti értesítés
+    showNotification('Automatikus frissítés aktív', 'success');
+
+})();
