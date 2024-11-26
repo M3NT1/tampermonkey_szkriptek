@@ -1,15 +1,62 @@
 // ==UserScript==
 // @name         Redmine Auto Refresh and Notifications
 // @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  Automatic refresh and notifications for Redmine
-// @author       Your Name
+// @version      1.1
+// @description  Automatic refresh and notifications for Redmine with persistent settings
+// @author       M3NT1
 // @match        https://projekt.nak.hu/*
 // @grant        none
 // ==/UserScript==
 
 (function() {
     'use strict';
+
+    // Beállítások kezelése
+    const Settings = {
+        storageKey: 'redmineAutoRefreshSettings',
+        notificationsKey: 'redmineNotifications',
+
+        // Alapértelmezett beállítások
+        defaults: {
+            refreshInterval: 0,
+            lastRefreshTime: null,
+            notifications: []
+        },
+
+        // Beállítások betöltése
+        load() {
+            const stored = localStorage.getItem(this.storageKey);
+            return stored ? JSON.parse(stored) : this.defaults;
+        },
+
+        // Beállítások mentése
+        save(settings) {
+            localStorage.setItem(this.storageKey, JSON.stringify(settings));
+        },
+
+        // Értesítések mentése
+        saveNotification(notification) {
+            const notifications = this.getNotifications();
+            notifications.unshift({
+                message: notification.message,
+                type: notification.type,
+                timestamp: new Date().getTime()
+            });
+
+            // Csak az utolsó 50 értesítést tároljuk
+            if (notifications.length > 50) {
+                notifications.pop();
+            }
+
+            localStorage.setItem(this.notificationsKey, JSON.stringify(notifications));
+        },
+
+        // Értesítések betöltése
+        getNotifications() {
+            const stored = localStorage.getItem(this.notificationsKey);
+            return stored ? JSON.parse(stored) : [];
+        }
+    };
 
     // Stílusok hozzáadása
     const style = document.createElement('style');
@@ -47,6 +94,18 @@
             border-radius: 5px;
             box-shadow: 0 2px 5px rgba(0,0,0,0.2);
         }
+
+        .notification-history {
+            max-height: 300px;
+            overflow-y: auto;
+            margin-top: 10px;
+            font-size: 12px;
+        }
+
+        .notification-history-item {
+            padding: 5px;
+            border-bottom: 1px solid #eee;
+        }
     `;
     document.head.appendChild(style);
 
@@ -65,21 +124,27 @@
     function createRefreshControls() {
         const controls = document.createElement('div');
         controls.className = 'auto-refresh-controls';
+
+        const settings = Settings.load();
+
         controls.innerHTML = `
             <label>
                 Auto frissítés:
                 <select id="refresh-interval">
-                    <option value="0">Ki</option>
-                    <option value="30">30 mp</option>
-                    <option value="60">1 perc</option>
-                    <option value="300">5 perc</option>
+                    <option value="0" ${settings.refreshInterval === 0 ? 'selected' : ''}>Ki</option>
+                    <option value="30" ${settings.refreshInterval === 30 ? 'selected' : ''}>30 mp</option>
+                    <option value="60" ${settings.refreshInterval === 60 ? 'selected' : ''}>1 perc</option>
+                    <option value="300" ${settings.refreshInterval === 300 ? 'selected' : ''}>5 perc</option>
                 </select>
             </label>
-            <div id="last-refresh">Utolsó frissítés: soha</div>
+            <div id="last-refresh">Utolsó frissítés: ${settings.lastRefreshTime ? new Date(settings.lastRefreshTime).toLocaleTimeString() : 'soha'}</div>
+            <button id="show-notifications">Értesítések mutatása</button>
+            <div class="notification-history" style="display: none;"></div>
         `;
 
         document.body.appendChild(controls);
 
+        // Eseménykezelők hozzáadása
         document.getElementById('refresh-interval').addEventListener('change', (e) => {
             const interval = parseInt(e.target.value);
             if (interval > 0) {
@@ -87,7 +152,42 @@
             } else {
                 stopAutoRefresh();
             }
+
+            // Beállítások mentése
+            const settings = Settings.load();
+            settings.refreshInterval = interval;
+            Settings.save(settings);
         });
+
+        document.getElementById('show-notifications').addEventListener('click', toggleNotificationHistory);
+
+        // Ha volt korábban beállított intervallum, indítsuk újra
+        if (settings.refreshInterval > 0) {
+            startAutoRefresh(settings.refreshInterval);
+        }
+    }
+
+    // Értesítések előzmények megjelenítése/elrejtése
+    function toggleNotificationHistory() {
+        const historyDiv = document.querySelector('.notification-history');
+        if (historyDiv.style.display === 'none') {
+            historyDiv.style.display = 'block';
+            updateNotificationHistory();
+        } else {
+            historyDiv.style.display = 'none';
+        }
+    }
+
+    // Értesítések előzmények frissítése
+    function updateNotificationHistory() {
+        const historyDiv = document.querySelector('.notification-history');
+        const notifications = Settings.getNotifications();
+
+        historyDiv.innerHTML = notifications.map(notification => `
+            <div class="notification-history-item ${notification.type}">
+                ${new Date(notification.timestamp).toLocaleString()} - ${notification.message}
+            </div>
+        `).join('');
     }
 
     // Értesítés megjelenítése
@@ -99,6 +199,10 @@
         notification.textContent = message;
 
         panel.appendChild(notification);
+
+        // Értesítés mentése
+        Settings.saveNotification({ message, type });
+        updateNotificationHistory();
 
         setTimeout(() => {
             notification.style.opacity = '0';
@@ -123,10 +227,16 @@
 
     // Frissítési idő frissítése
     function updateLastRefreshTime() {
+        const currentTime = new Date().getTime();
         const lastRefreshElement = document.getElementById('last-refresh');
         if (lastRefreshElement) {
-            lastRefreshElement.textContent = `Utolsó frissítés: ${new Date().toLocaleTimeString()}`;
+            lastRefreshElement.textContent = `Utolsó frissítés: ${new Date(currentTime).toLocaleTimeString()}`;
         }
+
+        // Mentés a beállításokba
+        const settings = Settings.load();
+        settings.lastRefreshTime = currentTime;
+        Settings.save(settings);
     }
 
     // Változások ellenőrzése
