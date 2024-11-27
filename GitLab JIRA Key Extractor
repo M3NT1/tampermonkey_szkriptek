@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitLab JIRA Key Extractor
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.1
 // @description  Extract JIRA keys from GitLab pages and generate JQL
 // @author       M3NT1
 // @match        https://gitlab.ulyssys.hu/*
@@ -41,6 +41,23 @@
             z-index: 10000;
             min-width: 400px;
             max-width: 600px;
+            max-height: 80vh;
+            overflow-y: auto;
+            resize: both;
+        }
+
+        .jira-extractor-modal-header {
+            cursor: move;
+            padding: 10px;
+            background: #f5f5f5;
+            margin: -20px -20px 10px -20px;
+            border-radius: 8px 8px 0 0;
+            position: sticky;
+            top: -20px;
+            z-index: 1;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
 
         .jira-extractor-overlay {
@@ -55,17 +72,16 @@
         }
 
         .jira-extractor-close {
-            position: absolute;
-            top: 10px;
-            right: 10px;
             cursor: pointer;
             font-size: 20px;
+            padding: 5px;
         }
 
         .jira-extractor-textarea {
             width: 100%;
             min-height: 100px;
             margin: 10px 0;
+            resize: vertical;
         }
 
         .jira-extractor-button {
@@ -78,11 +94,16 @@
             margin: 5px;
         }
 
+        .jira-extractor-button:hover {
+            background: #1557a0;
+        }
+
         .jira-extractor-results {
             margin-top: 15px;
             padding: 10px;
             background: #f5f5f5;
             border-radius: 4px;
+            word-wrap: break-word;
         }
 
         .jira-suggestion {
@@ -91,11 +112,15 @@
             background: #e9f5ff;
             border-radius: 4px;
         }
+
+        .jira-extractor-content {
+            padding: 10px 0;
+        }
     `);
 
     // Beállítások kezelése
     const defaultSettings = {
-        jiraPrefixes: ['EKOZIG']
+        jiraPrefixes: ['EKOZIG', 'IIER2ELES']
     };
 
     function getSettings() {
@@ -133,6 +158,51 @@
         return Array.from(new Set(matches));
     }
 
+    // Ablak mozgatás kezelése
+    function makeDraggable(modal) {
+        const header = modal.querySelector('.jira-extractor-modal-header');
+        let isDragging = false;
+        let currentX;
+        let currentY;
+        let initialX;
+        let initialY;
+        let xOffset = 0;
+        let yOffset = 0;
+
+        header.addEventListener('mousedown', dragStart);
+        document.addEventListener('mousemove', drag);
+        document.addEventListener('mouseup', dragEnd);
+
+        function dragStart(e) {
+            if (e.target.classList.contains('jira-extractor-close')) return;
+
+            initialX = e.clientX - xOffset;
+            initialY = e.clientY - yOffset;
+
+            if (e.target === header) {
+                isDragging = true;
+            }
+        }
+
+        function drag(e) {
+            if (isDragging) {
+                e.preventDefault();
+
+                currentX = e.clientX - initialX;
+                currentY = e.clientY - initialY;
+
+                xOffset = currentX;
+                yOffset = currentY;
+
+                modal.style.transform = `translate(${currentX}px, ${currentY}px)`;
+            }
+        }
+
+        function dragEnd() {
+            isDragging = false;
+        }
+    }
+
     // UI komponensek létrehozása
     function createUI() {
         // Fő gomb
@@ -148,27 +218,35 @@
         const modal = document.createElement('div');
         modal.className = 'jira-extractor-modal';
         modal.innerHTML = `
-            <span class="jira-extractor-close">&times;</span>
-            <h3>JIRA Key Extractor</h3>
-            <div>
-                <h4>JIRA Prefixes</h4>
-                <textarea class="jira-extractor-textarea" id="jiraPrefixes" placeholder="Enter JIRA prefixes, one per line"></textarea>
+            <div class="jira-extractor-modal-header">
+                <h3 style="margin: 0;">JIRA Key Extractor</h3>
+                <span class="jira-extractor-close">&times;</span>
+            </div>
+            <div class="jira-extractor-content">
                 <div>
-                    <button class="jira-extractor-button" id="saveSettings">Save Settings</button>
-                    <button class="jira-extractor-button" id="extractKeys">Extract Keys</button>
+                    <h4>JIRA Prefixes</h4>
+                    <textarea class="jira-extractor-textarea" id="jiraPrefixes" placeholder="Enter JIRA prefixes, one per line"></textarea>
+                    <div>
+                        <button class="jira-extractor-button" id="saveSettings">Save Settings</button>
+                        <button class="jira-extractor-button" id="extractKeys">Extract Keys</button>
+                    </div>
+                    <div class="jira-extractor-results" id="extractionResults"></div>
+                    <div class="jira-suggestion" id="prefixSuggestions"></div>
                 </div>
-                <div class="jira-extractor-results" id="extractionResults"></div>
-                <div class="jira-suggestion" id="prefixSuggestions"></div>
             </div>
         `;
 
         document.body.appendChild(overlay);
         document.body.appendChild(modal);
 
+        // Mozgathatóság hozzáadása
+        makeDraggable(modal);
+
         // Event listeners
         button.addEventListener('click', () => {
             overlay.style.display = 'block';
             modal.style.display = 'block';
+            modal.style.transform = 'translate(-50%, -50%)'; // Reset position
             loadSettings();
             updateSuggestions();
         });
