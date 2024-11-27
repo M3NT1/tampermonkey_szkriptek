@@ -1,0 +1,247 @@
+// ==UserScript==
+// @name         GitLab JIRA Key Extractor
+// @namespace    http://tampermonkey.net/
+// @version      1.0
+// @description  Extract JIRA keys from GitLab pages and generate JQL
+// @author       M3NT1
+// @match        https://gitlab.ulyssys.hu/*
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_addStyle
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // Stílusok hozzáadása
+    GM_addStyle(`
+        .jira-extractor-btn {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 9999;
+            padding: 10px;
+            background: #1f75cb;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .jira-extractor-modal {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 10000;
+            min-width: 400px;
+            max-width: 600px;
+        }
+
+        .jira-extractor-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 9999;
+        }
+
+        .jira-extractor-close {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            cursor: pointer;
+            font-size: 20px;
+        }
+
+        .jira-extractor-textarea {
+            width: 100%;
+            min-height: 100px;
+            margin: 10px 0;
+        }
+
+        .jira-extractor-button {
+            background: #1f75cb;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+
+        .jira-extractor-results {
+            margin-top: 15px;
+            padding: 10px;
+            background: #f5f5f5;
+            border-radius: 4px;
+        }
+
+        .jira-suggestion {
+            margin: 10px 0;
+            padding: 10px;
+            background: #e9f5ff;
+            border-radius: 4px;
+        }
+    `);
+
+    // Beállítások kezelése
+    const defaultSettings = {
+        jiraPrefixes: ['EKOZIG']
+    };
+
+    function getSettings() {
+        return GM_getValue('jiraExtractorSettings', defaultSettings);
+    }
+
+    function saveSettings(settings) {
+        GM_setValue('jiraExtractorSettings', settings);
+    }
+
+    // JIRA kulcsok keresése
+    function findJiraKeys(content, prefixes) {
+        const jiraKeys = new Set();
+        prefixes.forEach(prefix => {
+            const regex = new RegExp(`${prefix}-\\d+`, 'g');
+            const matches = content.match(regex);
+            if (matches) {
+                matches.forEach(match => jiraKeys.add(match));
+            }
+        });
+        return Array.from(jiraKeys);
+    }
+
+    // JQL generálás
+    function generateJQL(jiraKeys) {
+        if (jiraKeys.length === 0) return '';
+        return `key in (${jiraKeys.join(', ')})`;
+    }
+
+    // JIRA prefix ajánlások generálása
+    function generatePrefixSuggestions(content) {
+        const regex = /[A-Z]+(?=-\d+)/g;
+        const matches = content.match(regex);
+        if (!matches) return [];
+        return Array.from(new Set(matches));
+    }
+
+    // UI komponensek létrehozása
+    function createUI() {
+        // Fő gomb
+        const button = document.createElement('button');
+        button.className = 'jira-extractor-btn';
+        button.textContent = 'JIRA Extractor';
+        document.body.appendChild(button);
+
+        // Modal és overlay
+        const overlay = document.createElement('div');
+        overlay.className = 'jira-extractor-overlay';
+
+        const modal = document.createElement('div');
+        modal.className = 'jira-extractor-modal';
+        modal.innerHTML = `
+            <span class="jira-extractor-close">&times;</span>
+            <h3>JIRA Key Extractor</h3>
+            <div>
+                <h4>JIRA Prefixes</h4>
+                <textarea class="jira-extractor-textarea" id="jiraPrefixes" placeholder="Enter JIRA prefixes, one per line"></textarea>
+                <div>
+                    <button class="jira-extractor-button" id="saveSettings">Save Settings</button>
+                    <button class="jira-extractor-button" id="extractKeys">Extract Keys</button>
+                </div>
+                <div class="jira-extractor-results" id="extractionResults"></div>
+                <div class="jira-suggestion" id="prefixSuggestions"></div>
+            </div>
+        `;
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(modal);
+
+        // Event listeners
+        button.addEventListener('click', () => {
+            overlay.style.display = 'block';
+            modal.style.display = 'block';
+            loadSettings();
+            updateSuggestions();
+        });
+
+        overlay.addEventListener('click', () => {
+            overlay.style.display = 'none';
+            modal.style.display = 'none';
+        });
+
+        modal.querySelector('.jira-extractor-close').addEventListener('click', () => {
+            overlay.style.display = 'none';
+            modal.style.display = 'none';
+        });
+
+        modal.querySelector('#saveSettings').addEventListener('click', () => {
+            const prefixes = modal.querySelector('#jiraPrefixes').value
+                .split('\n')
+                .map(p => p.trim())
+                .filter(p => p);
+            saveSettings({ jiraPrefixes: prefixes });
+            alert('Settings saved!');
+        });
+
+        modal.querySelector('#extractKeys').addEventListener('click', () => {
+            const settings = getSettings();
+            const pageContent = document.body.innerText;
+            const jiraKeys = findJiraKeys(pageContent, settings.jiraPrefixes);
+            const jql = generateJQL(jiraKeys);
+
+            const resultsDiv = modal.querySelector('#extractionResults');
+            resultsDiv.innerHTML = `
+                <h4>Found JIRA Keys:</h4>
+                <p>${jiraKeys.join(', ') || 'No JIRA keys found'}</p>
+                <h4>Generated JQL:</h4>
+                <p>${jql || 'No JQL generated'}</p>
+                <button class="jira-extractor-button" id="copyJql">Copy JQL</button>
+            `;
+
+            resultsDiv.querySelector('#copyJql').addEventListener('click', () => {
+                navigator.clipboard.writeText(jql);
+                alert('JQL copied to clipboard!');
+            });
+        });
+    }
+
+    // Beállítások betöltése a UI-ba
+    function loadSettings() {
+        const settings = getSettings();
+        const prefixesTextarea = document.querySelector('#jiraPrefixes');
+        prefixesTextarea.value = settings.jiraPrefixes.join('\n');
+    }
+
+    // Ajánlások frissítése
+    function updateSuggestions() {
+        const pageContent = document.body.innerText;
+        const suggestions = generatePrefixSuggestions(pageContent);
+        const suggestionsDiv = document.querySelector('#prefixSuggestions');
+
+        if (suggestions.length > 0) {
+            suggestionsDiv.innerHTML = `
+                <h4>Suggested Prefixes Found on Page:</h4>
+                <p>${suggestions.join(', ')}</p>
+                <button class="jira-extractor-button" id="useSuggestions">Use These Prefixes</button>
+            `;
+
+            suggestionsDiv.querySelector('#useSuggestions').addEventListener('click', () => {
+                document.querySelector('#jiraPrefixes').value = suggestions.join('\n');
+            });
+        } else {
+            suggestionsDiv.innerHTML = '<p>No prefix suggestions found</p>';
+        }
+    }
+
+    // Szkript inicializálása
+    createUI();
+})();
