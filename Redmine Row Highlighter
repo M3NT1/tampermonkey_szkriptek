@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Redmine Row Highlighter
 // @namespace    http://tampermonkey.net/
-// @version      0.2
-// @description  Highlight rows with empty "Szállítói jegy [EKK]" column except "Nem hiba" status
+// @version      0.8
+// @description  Add yellow border to empty "Szállítói jegy [EKK]" cells except "Nem hiba" status
 // @match        https://projekt.nak.hu/projects/*/issues*
 // @grant        none
 // ==/UserScript==
@@ -10,14 +10,23 @@
 (function() {
     'use strict';
 
-    function highlightEmptyRows() {
+    // Stílusok hozzáadása
+    const warningStyle = document.createElement('style');
+    warningStyle.textContent = `
+        td.cf_296.warning-cell {
+            border: 2px solid #FFD700 !important;
+            border-radius: 2px !important;
+        }
+    `;
+    document.head.appendChild(warningStyle);
+
+    function highlightCells() {
         const table = document.querySelector('table.list.issues');
         if (!table) return;
 
         const rows = table.querySelectorAll('tr.issue');
         const headers = Array.from(table.querySelectorAll('th'));
 
-        // Find both required column indexes
         const supplierTicketColumnIndex = headers.findIndex(th => th.textContent.trim() === 'Szállítói jegy [EKK]');
         const statusColumnIndex = headers.findIndex(th => th.textContent.trim() === 'Státusz');
 
@@ -29,22 +38,45 @@
                 const supplierTicketCell = cells[supplierTicketColumnIndex];
                 const statusCell = cells[statusColumnIndex];
 
-                // Only highlight if supplier ticket is empty AND status is not "Nem hiba"
                 if (supplierTicketCell.textContent.trim() === '' &&
                     statusCell.textContent.trim() !== 'Nem hiba') {
-                    row.style.backgroundColor = 'yellow';
+                    supplierTicketCell.classList.add('warning-cell');
                 } else {
-                    // Remove highlighting if conditions are not met
-                    row.style.backgroundColor = '';
+                    supplierTicketCell.classList.remove('warning-cell');
                 }
             }
         });
     }
 
-    // Run the function when the page loads
-    highlightEmptyRows();
+    // Első futtatás késleltetéssel
+    setTimeout(highlightCells, 1000);
 
-    // Watch for changes in the DOM and re-run the function
-    const observer = new MutationObserver(highlightEmptyRows);
-    observer.observe(document.body, { childList: true, subtree: true });
+    // MutationObserver beállítása
+    const observer = new MutationObserver((mutations) => {
+        let shouldUpdate = false;
+        for (const mutation of mutations) {
+            if (mutation.type === 'childList' ||
+                (mutation.type === 'attributes' && mutation.target.classList.contains('issue'))) {
+                shouldUpdate = true;
+                break;
+            }
+        }
+        if (shouldUpdate) {
+            setTimeout(highlightCells, 100);
+        }
+    });
+
+    // A táblázat megfigyelése
+    setTimeout(() => {
+        const issuesTable = document.querySelector('table.list.issues');
+        if (issuesTable) {
+            observer.observe(issuesTable, {
+                childList: true,
+                subtree: true,
+                attributes: true,
+                attributeFilter: ['class']
+            });
+        }
+    }, 1500);
+
 })();
