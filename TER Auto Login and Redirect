@@ -1,0 +1,120 @@
+// ==UserScript==
+// @name         TER Auto Login and Redirect
+// @namespace    http://tampermonkey.net/
+// @version      1.1
+// @description  Automatically fills in login credentials, submits the form on TER login page, and redirects to the correct page
+// @match        https://ter.ulyssys.hu/ter/login*
+// @match        https://ter.ulyssys.hu/ter/login?dest=/ter/wt/wtown
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // Konfiguráció: Állítsd be a saját bejelentkezési adataidat
+    const config = {
+        username: 'USER',
+        password: 'PASS',
+        redirectUrl: 'https://ter.ulyssys.hu/ter/wt/wtown'
+    };
+
+    // Funkció a bejelentkezési űrlap kitöltésére és elküldésére
+    function autoLogin() {
+        const usernameField = document.querySelector('input[name="username"], #username');
+        const passwordField = document.querySelector('input[name="password"], #password');
+        const loginButton = document.querySelector('button[name="login"], #login');
+        const destField = document.querySelector('input[name="dest"], #dest');
+
+        if (usernameField && passwordField && loginButton) {
+            console.log('Mezők megtalálva, kitöltés...');
+
+            // Destination mező beállítása ha létezik
+            if(destField && !destField.value) {
+                destField.value = '/ter/wt/wtown';
+            }
+
+            // Közvetlenül állítsuk be az értékeket
+            usernameField.value = config.username;
+            passwordField.value = config.password;
+
+            // Használjunk Object.defineProperty-t az érték beállításához
+            Object.defineProperty(usernameField, 'value', {
+                writable: true,
+                value: config.username
+            });
+            Object.defineProperty(passwordField, 'value', {
+                writable: true,
+                value: config.password
+            });
+
+            // Esemény kiváltása a mezők kitöltése után
+            ['input', 'change', 'blur'].forEach(eventType => {
+                usernameField.dispatchEvent(new Event(eventType, { bubbles: true }));
+                passwordField.dispatchEvent(new Event(eventType, { bubbles: true }));
+                if(destField) {
+                    destField.dispatchEvent(new Event(eventType, { bubbles: true }));
+                }
+            });
+
+            setTimeout(() => {
+                console.log('Bejelentkezés gomb kattintása...');
+                loginButton.click();
+            }, 1000);
+        } else {
+            console.log('Mezők nem találhatók, újrapróbálkozás...');
+            setTimeout(autoLogin, 1000);
+        }
+    }
+
+    // Funkció az átirányításhoz
+    function redirectToCorrectPage() {
+        console.log('Átirányítás a helyes oldalra...');
+        window.location.href = config.redirectUrl;
+    }
+
+    // Funkció a DOM változásainak figyelésére
+    function observeDOM() {
+        const targetNode = document.body;
+        const config = { childList: true, subtree: true };
+
+        const callback = function(mutationsList, observer) {
+            for(let mutation of mutationsList) {
+                if (mutation.type === 'childList') {
+                    const usernameField = document.querySelector('input[name="username"], #username');
+                    if (usernameField) {
+                        console.log('Login form detected, starting auto-login...');
+                        observer.disconnect();
+                        setTimeout(autoLogin, 100);
+                        return;
+                    }
+                }
+            }
+        };
+
+        const observer = new MutationObserver(callback);
+        observer.observe(targetNode, config);
+    }
+
+    // Funkció a szkript többszöri futtatásához
+    function attemptLogin() {
+        if (document.readyState === 'complete') {
+            observeDOM();
+            autoLogin();
+        } else {
+            setTimeout(attemptLogin, 100);
+        }
+    }
+
+    // Az aktuális oldal URL-je alapján döntjük el, mit csináljunk
+    const currentUrl = window.location.href.toLowerCase();
+
+    if (currentUrl.includes('/login')) {
+        console.log('Bejelentkezési oldal detektálva, login kísérlet indítása...');
+        attemptLogin();
+    } else if (currentUrl === config.redirectUrl.toLowerCase()) {
+        console.log('Céloldal detektálva...');
+    } else if (currentUrl === 'https://ter.ulyssys.hu/ter/') {
+        console.log('Főoldal detektálva, átirányítás a céloldalra...');
+        redirectToCorrectPage();
+    }
+})();
