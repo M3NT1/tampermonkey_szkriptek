@@ -1,26 +1,60 @@
 // ==UserScript==
-// @name         Redmine Auto Refresh and Notifications
+// @name         Redmine Auto Refresh and Notifications with Change Tracking
 // @namespace    http://tampermonkey.net/
-// @version      1.3
-// @description  Automatic refresh and notifications for Redmine with persistent settings and notification management
+// @version      1.8
+// @description  Automatic refresh and notifications for Redmine with change tracking
 // @author       M3NT1
-// @match        https://projekt.nak.hu/*/issues*
+// @match        https://projekt.nak.hu/projects/*/issues*
+// @exclude      https://projekt.nak.hu/issues/*
 // @grant        none
 // ==/UserScript==
+
 
 (function() {
     'use strict';
 
-    // Beállítások kezelése
+    // Beállítások és állapot kezelése
     const Settings = {
         storageKey: 'redmineAutoRefreshSettings',
         notificationsKey: 'redmineNotifications',
+        previousStateKey: 'redminePreviousState',
+        processingKey: 'redmineProcessingState', // Új kulcs a feldolgozási állapot követésére
 
         // Alapértelmezett beállítások
         defaults: {
             refreshInterval: 0,
             lastRefreshTime: null,
             notifications: []
+        },
+
+        // Feldolgozási állapot kezelése
+        setProcessing(isProcessing) {
+            localStorage.setItem(this.processingKey, isProcessing);
+        },
+
+        isProcessing() {
+            return localStorage.getItem(this.processingKey) === 'true';
+        },
+
+        // Cleanup művelet
+        cleanup() {
+            // Előző állapot törlése
+            localStorage.removeItem(this.previousStateKey);
+            // Feldolgozási állapot törlése
+            localStorage.removeItem(this.processingKey);
+
+            // Értesítések tisztítása (csak az utolsó 50 megtartása)
+            const notifications = this.getNotifications();
+            if (notifications.length > 50) {
+                this.saveNotifications(notifications.slice(0, 50));
+            }
+
+            // Változások tisztítása (csak az utolsó 50 változás megtartása)
+            const changes = ChangeTracker.getStoredChanges();
+            if (changes.changedFields.length > 50) {
+                changes.changedFields = changes.changedFields.slice(0, 50);
+                ChangeTracker.storeChanges(changes);
+            }
         },
 
         // Beállítások betöltése
@@ -34,21 +68,32 @@
             localStorage.setItem(this.storageKey, JSON.stringify(settings));
         },
 
+        // Előző állapot mentése
+        savePreviousState(state) {
+            localStorage.setItem(this.previousStateKey, JSON.stringify(state));
+        },
+
+        // Előző állapot betöltése
+        loadPreviousState() {
+            const stored = localStorage.getItem(this.previousStateKey);
+            return stored ? JSON.parse(stored) : null;
+        },
+
         // Értesítések mentése
         saveNotification(notification) {
             const notifications = this.getNotifications();
             notifications.unshift({
-                id: Date.now() + Math.random(), // Egyedi azonosító
+                id: Date.now() + Math.random(),
                 message: notification.message,
                 type: notification.type,
                 timestamp: new Date().getTime()
             });
 
-            // Csak az utolsó 50 értesítést tároljuk
-            if (notifications.length > 50) {
-                notifications.pop();
-            }
+            this.saveNotifications(notifications.slice(0, 50)); // Csak az utolsó 50 értesítés megtartása
+        },
 
+        // Értesítések közvetlen mentése
+        saveNotifications(notifications) {
             localStorage.setItem(this.notificationsKey, JSON.stringify(notifications));
         },
 
@@ -67,10 +112,319 @@
         deleteNotification(notificationId) {
             const notifications = this.getNotifications();
             const filteredNotifications = notifications.filter(n => n.id !== notificationId);
-            localStorage.setItem(this.notificationsKey, JSON.stringify(filteredNotifications));
+            this.saveNotifications(filteredNotifications);
         }
     };
+    // Változások követése
+    const ChangeTracker = {
+        storageKey: 'redmineChangeTracker',
+        isEnabled: false,
+        activeElements: new Set(), // Az aktív DOM elemek nyilvántartása
 
+        init() {
+            this.isEnabled = localStorage.getItem('changeTrackerEnabled') === 'true';
+            this.createControls();
+            if (this.isEnabled) {
+                this.applyStoredChanges();
+                // Csak akkor ellenőrizzük a változásokat, ha nincs folyamatban feldolgozás
+                if (!Settings.isProcessing()) {
+                    this.checkForChangesAfterReload();
+                }
+            }
+        },
+
+        cleanup() {
+            // Aktív DOM elemek eltávolítása
+            this.activeElements.forEach(element => {
+                if (element && element.parentNode) {
+                    element.parentNode.removeChild(element);
+                }
+            });
+            this.activeElements.clear();
+        },
+
+        // DOM elem hozzáadása nyilvántartáshoz
+        addElement(element) {
+            this.activeElements.add(element);
+        },
+
+        // Változások ellenőrzése oldal újratöltés után
+        checkForChangesAfterReload() {
+            const previousState = Settings.loadPreviousState();
+            if (previousState) {
+                Settings.setProcessing(true);
+                const currentState = this.getCurrentState();
+                this.compareStates(previousState, currentState);
+                // Előző állapot és feldolgozási jelző törlése
+                Settings.cleanup();
+            }
+        },
+
+        // Aktuális állapot lekérése
+        getCurrentState() {
+            const fieldsToTrack = {
+                tracker: 'Típus',
+                status: 'Státusz',
+                subject: 'Tárgy',
+                priority: 'Prioritás',
+                cf_283: 'Hiba osztály [E-közig]',
+                assigned_to: 'Felelős',
+                cf_296: 'Szállítói jegy [EKK]'
+            };
+
+            return Array.from(document.querySelectorAll('tr.issue')).map(row => {
+                const data = {
+                    id: row.getAttribute('id').replace('issue-', '')
+                };
+
+                Object.keys(fieldsToTrack).forEach(field => {
+                    const cell = row.querySelector(`td.${field}`);
+                    if (cell) {
+                        const link = cell.querySelector('a');
+                        if (link) {
+                            data[field] = {
+                                text: cell.textContent.trim(),
+                                href: link.href,
+                                fullContent: cell.innerHTML.trim()
+                            };
+                        } else {
+                            data[field] = cell.textContent.trim();
+                        }
+                    }
+                });
+
+                return data;
+            });
+        },
+
+        createControls() {
+            const controls = document.createElement('div');
+            controls.className = 'change-marker-controls';
+            controls.innerHTML = `
+                <label>
+                    <input type="checkbox" id="change-tracker-toggle" ${this.isEnabled ? 'checked' : ''}>
+                    Változások követése
+                </label>
+                <button id="show-changes" class="btn btn-primary" style="margin-left: 10px;">Változások mutatása</button>
+                <button id="clear-all-changes" class="btn btn-danger" style="margin-left: 10px;">Minden jelölés törlése</button>
+            `;
+            document.body.appendChild(controls);
+            this.addElement(controls);
+
+            document.getElementById('change-tracker-toggle').addEventListener('change', (e) => {
+                this.isEnabled = e.target.checked;
+                localStorage.setItem('changeTrackerEnabled', this.isEnabled);
+                if (this.isEnabled) {
+                    this.applyStoredChanges();
+                    Settings.savePreviousState(this.getCurrentState());
+                } else {
+                    this.removeAllMarkers();
+                }
+            });
+
+            document.getElementById('show-changes').addEventListener('click', () => this.showChangesPopup());
+            document.getElementById('clear-all-changes').addEventListener('click', () => {
+                if (confirm('Biztosan törölni szeretnéd az összes változás jelölést?')) {
+                    this.clearAllChanges();
+                }
+            });
+        },
+
+        // Állapotok összehasonlítása
+        compareStates(previousState, currentState) {
+            const fieldsToTrack = {
+                tracker: 'Típus',
+                status: 'Státusz',
+                subject: 'Tárgy',
+                priority: 'Prioritás',
+                cf_283: 'Hiba osztály [E-közig]',
+                assigned_to: 'Felelős',
+                cf_296: 'Szállítói jegy [EKK]'
+            };
+
+            // Változások keresése
+            previousState.forEach(prevIssue => {
+                const currentIssue = currentState.find(curr => curr.id === prevIssue.id);
+                if (currentIssue) {
+                    Object.keys(fieldsToTrack).forEach(field => {
+                        const prevValue = prevIssue[field];
+                        const currValue = currentIssue[field];
+
+                        let hasChanged = false;
+                        if (typeof prevValue === 'object' && prevValue !== null) {
+                            hasChanged = prevValue.fullContent !== currValue.fullContent;
+                        } else {
+                            hasChanged = prevValue !== currValue;
+                        }
+
+                        if (hasChanged) {
+                            const oldValueText = typeof prevValue === 'object' ? prevValue.text : prevValue;
+                            const newValueText = typeof currValue === 'object' ? currValue.text : currValue;
+
+                            showNotification(
+                                `${fieldsToTrack[field]} változás: #${prevIssue.id} - ${oldValueText} → ${newValueText}`,
+                                'warning'
+                            );
+                            this.markChangedField(prevIssue.id, field, oldValueText, newValueText);
+                        }
+                    });
+                }
+            });
+
+            // Új issue-k keresése
+            const prevIds = previousState.map(issue => issue.id);
+            const currIds = currentState.map(issue => issue.id);
+            const addedIssues = currIds.filter(id => !prevIds.includes(id));
+
+            if (addedIssues.length > 0) {
+                showNotification(`${addedIssues.length} új feladat érkezett`, 'success');
+                addedIssues.forEach(id => this.markNewIssue(id));
+            }
+        },
+        getStoredChanges() {
+            const stored = localStorage.getItem(this.storageKey);
+            return stored ? JSON.parse(stored) : { newIssues: [], changedFields: [] };
+        },
+
+        storeChanges(changes) {
+            localStorage.setItem(this.storageKey, JSON.stringify(changes));
+        },
+
+        markNewIssue(issueId) {
+            if (!this.isEnabled) return;
+
+            const changes = this.getStoredChanges();
+            if (!changes.newIssues.includes(issueId)) {
+                changes.newIssues.push(issueId);
+                this.storeChanges(changes);
+                this.applyStoredChanges();
+            }
+        },
+
+        markChangedField(issueId, fieldName, oldValue, newValue) {
+            if (!this.isEnabled) return;
+
+            const changes = this.getStoredChanges();
+            changes.changedFields.push({
+                issueId,
+                fieldName,
+                oldValue,
+                newValue,
+                timestamp: new Date().getTime()
+            });
+            this.storeChanges(changes);
+            this.applyStoredChanges();
+        },
+
+        applyStoredChanges() {
+            if (!this.isEnabled) return;
+
+            const changes = this.getStoredChanges();
+
+            // Új issue-k jelölése
+            changes.newIssues.forEach(issueId => {
+                const row = document.querySelector(`tr#issue-${issueId}`);
+                if (row) {
+                    row.classList.add('new-issue');
+                }
+            });
+
+            // Változott mezők jelölése
+            changes.changedFields.forEach(change => {
+                const row = document.querySelector(`tr#issue-${change.issueId}`);
+                if (row) {
+                    const cell = row.querySelector(`td.${change.fieldName}`);
+                    if (cell) {
+                        cell.classList.add('changed-field');
+                    }
+                }
+            });
+        },
+
+        removeAllMarkers() {
+            document.querySelectorAll('.new-issue').forEach(el => el.classList.remove('new-issue'));
+            document.querySelectorAll('.changed-field').forEach(el => el.classList.remove('changed-field'));
+        },
+
+        clearAllChanges() {
+            this.storeChanges({ newIssues: [], changedFields: [] });
+            this.removeAllMarkers();
+            Settings.savePreviousState(this.getCurrentState());
+            showNotification('Minden változás jelölés törölve', 'success', false);
+        },
+
+        removeChange(type, id) {
+            const changes = this.getStoredChanges();
+            if (type === 'issue') {
+                changes.newIssues = changes.newIssues.filter(i => i !== id);
+            } else if (type === 'field') {
+                changes.changedFields = changes.changedFields.filter(c => c.timestamp !== id);
+            }
+            this.storeChanges(changes);
+            this.removeAllMarkers();
+            this.applyStoredChanges();
+            showNotification('Változás jelölés törölve', 'success', false);
+        },
+
+        showChangesPopup() {
+            const changes = this.getStoredChanges();
+
+            const overlay = document.createElement('div');
+            overlay.className = 'change-popup-overlay';
+
+            const popup = document.createElement('div');
+            popup.className = 'change-popup';
+
+            let content = '<h3>Változások</h3>';
+
+            if (changes.newIssues.length === 0 && changes.changedFields.length === 0) {
+                content += '<p>Nincs mentett változás.</p>';
+            } else {
+                if (changes.newIssues.length > 0) {
+                    content += '<h4>Új feladatok</h4>';
+                    changes.newIssues.forEach(issueId => {
+                        content += `
+                            <div class="change-item">
+                                <span>Feladat #${issueId}</span>
+                                <span class="delete-btn" data-type="issue" data-id="${issueId}">×</span>
+                            </div>
+                        `;
+                    });
+                }
+
+                if (changes.changedFields.length > 0) {
+                    content += '<h4>Változott mezők</h4>';
+                    changes.changedFields.forEach(change => {
+                        content += `
+                            <div class="change-item">
+                                <span>Feladat #${change.issueId} - ${change.fieldName}: ${change.oldValue} → ${change.newValue}</span>
+                                <span class="delete-btn" data-type="field" data-id="${change.timestamp}">×</span>
+                            </div>
+                        `;
+                    });
+                }
+            }
+
+            content += '<button class="btn btn-primary" onclick="this.closest(\'.change-popup-overlay\').remove()">Bezárás</button>';
+
+            popup.innerHTML = content;
+            overlay.appendChild(popup);
+            document.body.appendChild(overlay);
+            this.addElement(overlay);
+
+            popup.querySelectorAll('.delete-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const type = e.target.dataset.type;
+                    const id = type === 'issue' ? e.target.dataset.id : parseFloat(e.target.dataset.id);
+                    this.removeChange(type, id);
+                    e.target.closest('.change-item').remove();
+                    if (popup.querySelectorAll('.change-item').length === 0) {
+                        overlay.remove();
+                    }
+                });
+            });
+        }
+    };
     // Stílusok hozzáadása
     const style = document.createElement('style');
     style.textContent = `
@@ -107,6 +461,18 @@
             border-radius: 5px;
             box-shadow: 0 2px 5px rgba(0,0,0,0.2);
             max-width: 400px;
+            z-index: 1000;
+        }
+
+        .change-marker-controls {
+            position: fixed;
+            bottom: 20px;
+            left: 430px;
+            background: #fff;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            z-index: 1000;
         }
 
         .notification-history {
@@ -124,26 +490,56 @@
             align-items: center;
         }
 
-        .notification-history-item .delete-btn {
+        .new-issue {
+            font-weight: bold !important;
+            color: #dc3545 !important;
+        }
+
+        .changed-field {
+            font-weight: bold !important;
+            color: #ffc107 !important;
+        }
+
+        .change-popup {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+            z-index: 1001;
+            max-width: 80%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        .change-popup-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+        }
+
+        .change-item {
+            padding: 5px;
+            margin: 5px 0;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .change-item .delete-btn {
             cursor: pointer;
             color: #dc3545;
             padding: 2px 6px;
             border-radius: 3px;
             font-weight: bold;
-        }
-
-        .notification-history-item .delete-btn:hover {
-            background-color: #dc3545;
-            color: white;
-        }
-
-        .notification-controls {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-top: 10px;
-            padding: 5px 0;
-            border-top: 1px solid #eee;
         }
 
         .btn {
@@ -175,13 +571,13 @@
     document.head.appendChild(style);
 
     let refreshInterval;
-    let lastUpdate = {};
 
     // Értesítési panel létrehozása
     function createNotificationPanel() {
         const panel = document.createElement('div');
         panel.className = 'notification-panel';
         document.body.appendChild(panel);
+        ChangeTracker.addElement(panel);
         return panel;
     }
 
@@ -211,8 +607,8 @@
         `;
 
         document.body.appendChild(controls);
+        ChangeTracker.addElement(controls);
 
-        // Eseménykezelők hozzáadása
         document.getElementById('refresh-interval').addEventListener('change', (e) => {
             const interval = parseInt(e.target.value);
             if (interval > 0) {
@@ -221,7 +617,6 @@
                 stopAutoRefresh();
             }
 
-            // Beállítások mentése
             const settings = Settings.load();
             settings.refreshInterval = interval;
             Settings.save(settings);
@@ -237,7 +632,6 @@
             }
         });
 
-        // Ha volt korábban beállított intervallum, indítsuk újra
         if (settings.refreshInterval > 0) {
             startAutoRefresh(settings.refreshInterval);
         }
@@ -269,7 +663,6 @@
             </div>
         `).join('');
 
-        // Törlés gombok eseménykezelőinek hozzáadása
         historyDiv.querySelectorAll('.delete-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const notificationId = parseFloat(e.target.dataset.id);
@@ -290,7 +683,6 @@
 
         panel.appendChild(notification);
 
-        // Csak akkor tároljuk, ha a store paraméter true
         if (store) {
             Settings.saveNotification({ message, type });
             updateNotificationHistory();
@@ -298,14 +690,23 @@
 
         setTimeout(() => {
             notification.style.opacity = '0';
-            setTimeout(() => notification.remove(), 500);
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.parentNode.removeChild(notification);
+                }
+            }, 500);
         }, 5000);
     }
 
     // Automatikus frissítés indítása
     function startAutoRefresh(seconds) {
         stopAutoRefresh();
-        refreshInterval = setInterval(checkForUpdates, seconds * 1000);
+        refreshInterval = setInterval(() => {
+            // Csak akkor frissítünk, ha nincs folyamatban feldolgozás
+            if (!Settings.isProcessing()) {
+                checkForUpdates();
+            }
+        }, seconds * 1000);
         updateLastRefreshTime();
     }
 
@@ -325,71 +726,42 @@
             lastRefreshElement.textContent = `Utolsó frissítés: ${new Date(currentTime).toLocaleTimeString()}`;
         }
 
-        // Mentés a beállításokba
         const settings = Settings.load();
         settings.lastRefreshTime = currentTime;
         Settings.save(settings);
     }
 
-    // Változások ellenőrzése
+    // Változások ellenőrzése és oldal újratöltése
     function checkForUpdates() {
-        fetch(window.location.href)
-            .then(response => response.text())
-            .then(html => {
-                const parser = new DOMParser();
-                const doc = parser.parseFromString(html, 'text/html');
-
-                // Issue változások ellenőrzése
-                if (window.location.pathname.includes('/issues')) {
-                    checkIssueChanges(doc);
-                }
-
-                updateLastRefreshTime();
-            });
-    }
-
-    // Issue változások ellenőrzése
-    function checkIssueChanges(newDoc) {
-        const currentIssues = Array.from(document.querySelectorAll('tr.issue')).map(row => ({
-            id: row.getAttribute('id'),
-            status: row.querySelector('td.status')?.textContent,
-            priority: row.querySelector('td.priority')?.textContent
-        }));
-
-        const newIssues = Array.from(newDoc.querySelectorAll('tr.issue')).map(row => ({
-            id: row.getAttribute('id'),
-            status: row.querySelector('td.status')?.textContent,
-            priority: row.querySelector('td.priority')?.textContent
-        }));
-
-        // Változások keresése
-        currentIssues.forEach(current => {
-            const newIssue = newIssues.find(issue => issue.id === current.id);
-            if (newIssue) {
-                if (newIssue.status !== current.status) {
-                    showNotification(`Státusz változás: ${current.id} - ${newIssue.status}`, 'warning');
-                }
-                if (newIssue.priority !== current.priority) {
-                    showNotification(`Prioritás változás: ${current.id} - ${newIssue.priority}`, 'warning');
-                }
-            }
-        });
-
-        // Új issue-k keresése
-        const newIssueIds = newIssues.map(issue => issue.id);
-        const currentIssueIds = currentIssues.map(issue => issue.id);
-        const addedIssues = newIssueIds.filter(id => !currentIssueIds.includes(id));
-
-        if (addedIssues.length > 0) {
-            showNotification(`${addedIssues.length} új feladat érkezett`, 'success');
-            window.location.reload();
+        if (ChangeTracker.isEnabled) {
+            Settings.savePreviousState(ChangeTracker.getCurrentState());
         }
+        // Cleanup a régi DOM elemek eltávolításához
+        ChangeTracker.cleanup();
+        window.location.reload(true);
     }
 
     // Szkript inicializálása
-    createRefreshControls();
+    function initializeScript() {
+        if (document.querySelector('.auto-refresh-controls')) {
+            return;
+        }
 
-    // Kezdeti értesítés
-    showNotification('Automatikus frissítés aktív', 'success', false);
+        createRefreshControls();
+        ChangeTracker.init();
+
+        if (!localStorage.getItem('initialNotificationShown')) {
+            showNotification('Automatikus frissítés aktív', 'success', false);
+            localStorage.setItem('initialNotificationShown', 'true');
+        }
+
+        const settings = Settings.load();
+        if (settings.refreshInterval > 0) {
+            startAutoRefresh(settings.refreshInterval);
+        }
+    }
+
+    // Szkript indítása
+    initializeScript();
 
 })();
