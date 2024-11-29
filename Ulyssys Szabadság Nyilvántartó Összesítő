@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ulyssys Szabadság Nyilvántartó Összesítő
 // @namespace    http://tampermonkey.net/
-// @version      1.5
+// @version      1.6
 // @description  Automatikus statisztika készítése az Ulyssys szabadság nyilvántartó rendszerhez
 // @author       M3NT1
 // @match        https://ter.ulyssys.hu/ter/leave/lquery
@@ -12,7 +12,6 @@
 (function() {
     'use strict';
 
-    // Stílusok maradnak ugyanazok mint az előző verzióban
     const styles = `
         .stats-widget {
             position: fixed;
@@ -104,21 +103,18 @@
         .stat-item.unnepnap { color: #dc3545; }
     `;
 
-    // Segédfüggvény az ünnepnapok ellenőrzéséhez
-function isHoliday(element) {
-    // Az elem saját computed style-jának ellenőrzése
-    const style = window.getComputedStyle(element);
-    const bgColor = style.background || style.backgroundColor;
+    function isHoliday(element) {
+        const style = window.getComputedStyle(element);
+        const bgColor = style.background || style.backgroundColor;
 
-    // Debug
-    console.debug('Checking element:', element.getAttribute('data-date'), 'Background:', bgColor);
+        // Debug
+        console.debug('Checking element:', element.getAttribute('data-date'), 'Background:', bgColor);
 
-    // Színek ellenőrzése különböző formátumokban
-    return bgColor.includes('rgb(255, 153, 148)') || // RGB formátum szóközökkel
-           bgColor.includes('rgb(255,153,148)') ||   // RGB formátum szóközök nélkül
-           bgColor.includes('#ff9994') ||            // Hexa formátum
-           bgColor.includes('255, 153, 148');        // Részleges RGB egyezés
-}
+        return bgColor.includes('rgb(255, 153, 148)') ||
+               bgColor.includes('rgb(255,153,148)') ||
+               bgColor.includes('#ff9994') ||
+               bgColor.includes('255, 153, 148');
+    }
 
     function calculateStats() {
         const stats = {
@@ -155,7 +151,11 @@ function isHoliday(element) {
                     stats.unnepnapok++;
                 }
 
-                // Események számolása
+                // Helyettesítések számolása
+                const helyettesitesek = day.querySelectorAll('.ter-leave-substitute');
+                stats.helyettesites += helyettesitesek.length;
+
+                // Többi esemény számolása
                 day.querySelectorAll('.fc-event-title').forEach(event => {
                     const text = event.textContent.trim();
 
@@ -165,12 +165,11 @@ function isHoliday(element) {
                         return;
                     }
 
-                    // Helyettesítések és egyéb események számolása
+                    // Események számolása
                     switch(text) {
                         case 'X': stats.szabadsag++; break;
                         case 'RT': stats.tavol++; break;
                         case 'T': stats.homeOffice++; break;
-                        case 'H': stats.helyettesites++; break;
                         case 'B': stats.betegszabadsag++; break;
                         case 'E': stats.elozoEvi++; break;
                         case 'V': stats.vezetoiTavol++; break;
@@ -194,8 +193,6 @@ function isHoliday(element) {
         return stats;
     }
 
-    // A többi függvény (createWidget, updateWidget, throttle, initialize)
-    // marad ugyanaz mint az előző verzióban...
     function createWidget() {
         const styleSheet = document.createElement('style');
         styleSheet.textContent = styles;
@@ -376,7 +373,6 @@ function isHoliday(element) {
         tryInit();
     }
 
-    // Szkript indítása
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initialize);
     } else {
