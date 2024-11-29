@@ -1,0 +1,385 @@
+// ==UserScript==
+// @name         Ulyssys Szabadság Nyilvántartó Összesítő
+// @namespace    http://tampermonkey.net/
+// @version      1.5
+// @description  Automatikus statisztika készítése az Ulyssys szabadság nyilvántartó rendszerhez
+// @author       M3NT1
+// @match        https://ter.ulyssys.hu/ter/leave/lquery
+// @grant        none
+// @run-at       document-end
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // Stílusok maradnak ugyanazok mint az előző verzióban
+    const styles = `
+        .stats-widget {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: white;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            padding: 0;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 9999;
+            font-family: Arial, sans-serif;
+            min-width: 280px;
+            max-width: 350px;
+            cursor: move;
+            user-select: none;
+        }
+        .stats-widget.collapsed .widget-content {
+            display: none;
+        }
+        .widget-header {
+            padding: 10px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #eee;
+            border-radius: 8px 8px 0 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: move;
+        }
+        .widget-header h3 {
+            margin: 0;
+            font-size: 16px;
+            color: #333;
+        }
+        .widget-controls {
+            display: flex;
+            gap: 5px;
+        }
+        .widget-control {
+            cursor: pointer;
+            padding: 2px 6px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: white;
+            font-size: 12px;
+        }
+        .widget-control:hover {
+            background: #f0f0f0;
+        }
+        .widget-content {
+            padding: 15px;
+            max-height: calc(100vh - 150px);
+            overflow-y: auto;
+        }
+        .stat-item {
+            display: flex;
+            justify-content: space-between;
+            margin: 5px 0;
+            font-size: 14px;
+            padding: 3px 0;
+        }
+        .stat-value {
+            font-weight: bold;
+            margin-left: 10px;
+        }
+        .stat-section {
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+            margin-bottom: 10px;
+        }
+        .stat-section:last-child {
+            border-bottom: none;
+            padding-bottom: 0;
+            margin-bottom: 0;
+        }
+        .stat-item.szabadsag { color: #dc3545; }
+        .stat-item.tavol { color: #fd7e14; }
+        .stat-item.home-office { color: #28a745; }
+        .stat-item.helyettesites { color: #007bff; }
+        .stat-item.beteg { color: #6610f2; }
+        .stat-item.vezeto { color: #6f42c1; }
+        .stat-item.oktatas { color: #20c997; }
+        .stat-item.diak { color: #17a2b8; }
+        .stat-item.pihenonap { color: #87ceeb; }
+        .stat-item.felteteles { color: #ffc107; }
+        .stat-item.hetvege { color: #6f42c1; }
+        .stat-item.hetvegi-munka { color: #fd7e14; }
+        .stat-item.unnepnap { color: #dc3545; }
+    `;
+
+    // Segédfüggvény az ünnepnapok ellenőrzéséhez
+function isHoliday(element) {
+    // Az elem saját computed style-jának ellenőrzése
+    const style = window.getComputedStyle(element);
+    const bgColor = style.background || style.backgroundColor;
+
+    // Debug
+    console.debug('Checking element:', element.getAttribute('data-date'), 'Background:', bgColor);
+
+    // Színek ellenőrzése különböző formátumokban
+    return bgColor.includes('rgb(255, 153, 148)') || // RGB formátum szóközökkel
+           bgColor.includes('rgb(255,153,148)') ||   // RGB formátum szóközök nélkül
+           bgColor.includes('#ff9994') ||            // Hexa formátum
+           bgColor.includes('255, 153, 148');        // Részleges RGB egyezés
+}
+
+    function calculateStats() {
+        const stats = {
+            szabadsag: 0,
+            tavol: 0,
+            homeOffice: 0,
+            helyettesites: 0,
+            betegszabadsag: 0,
+            elozoEvi: 0,
+            vezetoiTavol: 0,
+            oktatas: 0,
+            diakTavol: 0,
+            pihenonap: 0,
+            hetvegek: 0,
+            hetvegiMunka: 0,
+            unnepnapok: 0,
+            feltetelesNapok: 0,
+            total: 0
+        };
+
+        try {
+            document.querySelectorAll('.fc-daygrid-day:not(.fc-day-other)').forEach(day => {
+                // Hétvégék számolása
+                if (day.classList.contains('fc-day-sat') || day.classList.contains('fc-day-sun')) {
+                    stats.hetvegek++;
+                    const events = day.querySelectorAll('.fc-event-title');
+                    if (events.length > 0) {
+                        stats.hetvegiMunka++;
+                    }
+                }
+
+                // Ünnepnapok számolása
+                if (isHoliday(day)) {
+                    stats.unnepnapok++;
+                }
+
+                // Események számolása
+                day.querySelectorAll('.fc-event-title').forEach(event => {
+                    const text = event.textContent.trim();
+
+                    // Feltételes napok ellenőrzése
+                    if (text.startsWith('F')) {
+                        stats.feltetelesNapok++;
+                        return;
+                    }
+
+                    // Helyettesítések és egyéb események számolása
+                    switch(text) {
+                        case 'X': stats.szabadsag++; break;
+                        case 'RT': stats.tavol++; break;
+                        case 'T': stats.homeOffice++; break;
+                        case 'H': stats.helyettesites++; break;
+                        case 'B': stats.betegszabadsag++; break;
+                        case 'E': stats.elozoEvi++; break;
+                        case 'V': stats.vezetoiTavol++; break;
+                        case 'O': stats.oktatas++; break;
+                        case 'D': stats.diakTavol++; break;
+                        case 'P': stats.pihenonap++; break;
+                    }
+                });
+            });
+
+            // Összes esemény számolása
+            stats.total = stats.szabadsag + stats.tavol + stats.homeOffice +
+                         stats.helyettesites + stats.betegszabadsag + stats.elozoEvi +
+                         stats.vezetoiTavol + stats.oktatas + stats.diakTavol +
+                         stats.pihenonap + stats.feltetelesNapok;
+
+        } catch (e) {
+            console.log('Statisztika számítási hiba:', e);
+        }
+
+        return stats;
+    }
+
+    // A többi függvény (createWidget, updateWidget, throttle, initialize)
+    // marad ugyanaz mint az előző verzióban...
+    function createWidget() {
+        const styleSheet = document.createElement('style');
+        styleSheet.textContent = styles;
+        document.head.appendChild(styleSheet);
+
+        const widget = document.createElement('div');
+        widget.className = 'stats-widget';
+        widget.innerHTML = `
+            <div class="widget-header">
+                <h3>Naptár statisztika</h3>
+                <div class="widget-controls">
+                    <button class="widget-control" id="collapseWidget">−</button>
+                </div>
+            </div>
+            <div class="widget-content"></div>
+        `;
+        document.body.appendChild(widget);
+
+        const collapseBtn = widget.querySelector('#collapseWidget');
+        collapseBtn.addEventListener('click', () => {
+            widget.classList.toggle('collapsed');
+            collapseBtn.textContent = widget.classList.contains('collapsed') ? '+' : '−';
+        });
+
+        let isDragging = false;
+        let currentX;
+        let currentY;
+        let initialX;
+        let initialY;
+
+        widget.querySelector('.widget-header').addEventListener('mousedown', dragStart);
+        document.addEventListener('mousemove', drag);
+        document.addEventListener('mouseup', dragEnd);
+
+        function dragStart(e) {
+            initialX = e.clientX - widget.offsetLeft;
+            initialY = e.clientY - widget.offsetTop;
+            isDragging = true;
+        }
+
+        function drag(e) {
+            if (isDragging) {
+                e.preventDefault();
+                currentX = e.clientX - initialX;
+                currentY = e.clientY - initialY;
+
+                currentX = Math.max(0, Math.min(currentX, window.innerWidth - widget.offsetWidth));
+                currentY = Math.max(0, Math.min(currentY, window.innerHeight - widget.offsetHeight));
+
+                widget.style.left = currentX + "px";
+                widget.style.top = currentY + "px";
+                widget.style.right = 'auto';
+            }
+        }
+
+        function dragEnd() {
+            isDragging = false;
+        }
+
+        return widget;
+    }
+
+    function updateWidget(widget) {
+        const stats = calculateStats();
+        const content = widget.querySelector('.widget-content');
+
+        content.innerHTML = `
+            <div class="stat-section">
+                <div class="stat-item szabadsag">
+                    <span>Szabadság (X):</span>
+                    <span class="stat-value">${stats.szabadsag} nap</span>
+                </div>
+                <div class="stat-item tavol">
+                    <span>Rendszeres távmunka (RT):</span>
+                    <span class="stat-value">${stats.tavol} nap</span>
+                </div>
+                <div class="stat-item home-office">
+                    <span>Távolról dolgozik (T):</span>
+                    <span class="stat-value">${stats.homeOffice} nap</span>
+                </div>
+                <div class="stat-item helyettesites">
+                    <span>Helyettesítés (H):</span>
+                    <span class="stat-value">${stats.helyettesites} nap</span>
+                </div>
+            </div>
+            <div class="stat-section">
+                <div class="stat-item beteg">
+                    <span>Betegszabadság (B):</span>
+                    <span class="stat-value">${stats.betegszabadsag} nap</span>
+                </div>
+                <div class="stat-item szabadsag">
+                    <span>Előző évi szabadság (E):</span>
+                    <span class="stat-value">${stats.elozoEvi} nap</span>
+                </div>
+                <div class="stat-item vezeto">
+                    <span>Vezetői távollét (V):</span>
+                    <span class="stat-value">${stats.vezetoiTavol} nap</span>
+                </div>
+                <div class="stat-item oktatas">
+                    <span>Oktatás (O):</span>
+                    <span class="stat-value">${stats.oktatas} nap</span>
+                </div>
+                <div class="stat-item diak">
+                    <span>Diák távollét (D):</span>
+                    <span class="stat-value">${stats.diakTavol} nap</span>
+                </div>
+                <div class="stat-item pihenonap">
+                    <span>Pihenőnap (P):</span>
+                    <span class="stat-value">${stats.pihenonap} nap</span>
+                </div>
+            </div>
+            <div class="stat-section">
+                <div class="stat-item hetvege">
+                    <span>Hétvégék száma:</span>
+                    <span class="stat-value">${stats.hetvegek} nap</span>
+                </div>
+                <div class="stat-item hetvegi-munka">
+                    <span>Hétvégi munka:</span>
+                    <span class="stat-value">${stats.hetvegiMunka} nap</span>
+                </div>
+                <div class="stat-item unnepnap">
+                    <span>Ünnepnapok:</span>
+                    <span class="stat-value">${stats.unnepnapok} nap</span>
+                </div>
+                <div class="stat-item felteteles">
+                    <span>Feltételes napok (F):</span>
+                    <span class="stat-value">${stats.feltetelesNapok} nap</span>
+                </div>
+            </div>
+            <div class="stat-section">
+                <div class="stat-item">
+                    <span><strong>Összes esemény:</strong></span>
+                    <span class="stat-value">${stats.total} nap</span>
+                </div>
+            </div>
+        `;
+    }
+
+    function throttle(func, limit) {
+        let inThrottle;
+        return function() {
+            const args = arguments;
+            const context = this;
+            if (!inThrottle) {
+                func.apply(context, args);
+                inThrottle = true;
+                setTimeout(() => inThrottle = false, limit);
+            }
+        };
+    }
+
+    function initialize() {
+        let initAttempts = 0;
+        const maxAttempts = 10;
+
+        function tryInit() {
+            if (document.querySelector('.fc-daygrid-day')) {
+                const widget = createWidget();
+                updateWidget(widget);
+
+                const throttledUpdate = throttle(() => updateWidget(widget), 1000);
+
+                const calendarContainer = document.querySelector('.ui-tabs-panels');
+                if (calendarContainer) {
+                    const observer = new MutationObserver(throttledUpdate);
+                    observer.observe(calendarContainer, {
+                        childList: true,
+                        subtree: true,
+                        attributes: false
+                    });
+                }
+            } else if (initAttempts < maxAttempts) {
+                initAttempts++;
+                setTimeout(tryInit, 1000);
+            }
+        }
+
+        tryInit();
+    }
+
+    // Szkript indítása
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initialize);
+    } else {
+        setTimeout(initialize, 1000);
+    }
+})();
