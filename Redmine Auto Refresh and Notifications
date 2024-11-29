@@ -366,64 +366,130 @@
             showNotification('Változás jelölés törölve', 'success', false);
         },
 
-        showChangesPopup() {
-            const changes = this.getStoredChanges();
+showChangesPopup() {
+    const changes = this.getStoredChanges();
 
-            const overlay = document.createElement('div');
-            overlay.className = 'change-popup-overlay';
+    const overlay = document.createElement('div');
+    overlay.className = 'change-popup-overlay';
 
-            const popup = document.createElement('div');
-            popup.className = 'change-popup';
+    const popup = document.createElement('div');
+    popup.className = 'change-popup';
 
-            let content = '<h3>Változások</h3>';
+    let content = '<h3>Változások</h3>';
 
-            if (changes.newIssues.length === 0 && changes.changedFields.length === 0) {
-                content += '<p>Nincs mentett változás.</p>';
-            } else {
-                if (changes.newIssues.length > 0) {
-                    content += '<h4>Új feladatok</h4>';
-                    changes.newIssues.forEach(issueId => {
-                        content += `
-                            <div class="change-item">
-                                <span>Feladat #${issueId}</span>
-                                <span class="delete-btn" data-type="issue" data-id="${issueId}">×</span>
-                            </div>
-                        `;
-                    });
-                }
-
-                if (changes.changedFields.length > 0) {
-                    content += '<h4>Változott mezők</h4>';
-                    changes.changedFields.forEach(change => {
-                        content += `
-                            <div class="change-item">
-                                <span>Feladat #${change.issueId} - ${change.fieldName}: ${change.oldValue} → ${change.newValue}</span>
-                                <span class="delete-btn" data-type="field" data-id="${change.timestamp}">×</span>
-                            </div>
-                        `;
-                    });
-                }
-            }
-
-            content += '<button class="btn btn-primary" onclick="this.closest(\'.change-popup-overlay\').remove()">Bezárás</button>';
-
-            popup.innerHTML = content;
-            overlay.appendChild(popup);
-            document.body.appendChild(overlay);
-            this.addElement(overlay);
-
-            popup.querySelectorAll('.delete-btn').forEach(btn => {
-                btn.addEventListener('click', (e) => {
-                    const type = e.target.dataset.type;
-                    const id = type === 'issue' ? e.target.dataset.id : parseFloat(e.target.dataset.id);
-                    this.removeChange(type, id);
-                    e.target.closest('.change-item').remove();
-                    if (popup.querySelectorAll('.change-item').length === 0) {
-                        overlay.remove();
-                    }
-                });
+    if (changes.newIssues.length === 0 && changes.changedFields.length === 0) {
+        content += '<p>Nincs mentett változás.</p>';
+    } else {
+        if (changes.newIssues.length > 0) {
+            content += '<h4>Új feladatok</h4>';
+            changes.newIssues.forEach(issueId => {
+                content += `
+                    <div class="change-item">
+                        <span>Feladat #${issueId}</span>
+                        <span class="delete-btn" data-type="issue" data-id="${issueId}">×</span>
+                    </div>
+                `;
             });
         }
+
+        if (changes.changedFields.length > 0) {
+            content += '<h4>Változott mezők</h4>';
+
+            // Változások csoportosítása feladatok szerint
+            const groupedChanges = changes.changedFields.reduce((acc, change) => {
+                if (!acc[change.issueId]) {
+                    acc[change.issueId] = [];
+                }
+                acc[change.issueId].push(change);
+                return acc;
+            }, {});
+
+            // Csoportosított változások megjelenítése
+            Object.entries(groupedChanges).forEach(([issueId, issueChanges]) => {
+                content += `<div class="change-item">`;
+                content += `<div class="issue-changes">`;
+                content += `<div class="issue-id">Feladat #${issueId}</div>`;
+                content += `<div class="changes-list">`;
+
+                issueChanges.forEach(change => {
+                    content += `
+                        <div class="change-detail">
+                            <span>${change.fieldName}: ${change.oldValue} → ${change.newValue}</span>
+                            <span class="delete-btn" data-type="field" data-id="${change.timestamp}">×</span>
+                        </div>
+                    `;
+                });
+
+                content += `</div></div></div>`;
+            });
+        }
+    }
+
+    content += '<button class="btn btn-primary" onclick="this.closest(\'.change-popup-overlay\').remove()">Bezárás</button>';
+
+    popup.innerHTML = content;
+    overlay.appendChild(popup);
+    document.body.appendChild(overlay);
+    this.addElement(overlay);
+
+    // CSS stílusok hozzáadása a csoportosított megjelenítéshez
+    const style = document.createElement('style');
+    style.textContent = `
+        .issue-changes {
+            border: 1px solid #eee;
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .issue-id {
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #007bff;
+        }
+        .changes-list {
+            margin-left: 20px;
+        }
+        .change-detail {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 3px 0;
+            border-bottom: 1px dashed #eee;
+        }
+        .change-detail:last-child {
+            border-bottom: none;
+        }
+    `;
+    document.head.appendChild(style);
+
+    popup.querySelectorAll('.delete-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const type = e.target.dataset.type;
+            const id = type === 'issue' ? e.target.dataset.id : parseFloat(e.target.dataset.id);
+            this.removeChange(type, id);
+
+            // Ha ez az utolsó változás az adott feladathoz, távolítsuk el az egész blokkot
+            if (type === 'field') {
+                const changeDetail = e.target.closest('.change-detail');
+                const changesList = changeDetail.parentElement;
+                const issueChanges = changeDetail.closest('.issue-changes');
+
+                changeDetail.remove();
+
+                if (changesList.children.length === 0) {
+                    issueChanges.remove();
+                }
+            } else {
+                e.target.closest('.change-item').remove();
+            }
+
+            if (popup.querySelectorAll('.change-item').length === 0) {
+                overlay.remove();
+            }
+        });
+    });
+}
+
     };
     // Stílusok hozzáadása
     const style = document.createElement('style');
