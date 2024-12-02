@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitLab JIRA Key Extractor
 // @namespace    http://tampermonkey.net/
-// @version      1.1
+// @version      1.2
 // @description  Extract JIRA keys from GitLab pages and generate JQL
 // @author       M3NT1
 // @match        https://gitlab.ulyssys.hu/*
@@ -150,7 +150,7 @@
         return `key in (${jiraKeys.join(', ')})`;
     }
 
-    // JIRA prefix ajánlások generálása
+    // JIRA prefix ajánlások generálása a commit üzenetekből
     function generatePrefixSuggestions(content) {
         const regex = /[A-Z]+(?=-\d+)/g;
         const matches = content.match(regex);
@@ -272,7 +272,12 @@
 
         modal.querySelector('#extractKeys').addEventListener('click', () => {
             const settings = getSettings();
-            const pageContent = document.body.innerText;
+            // Csak a commit üzeneteket tartalmazó div-ből keressük a JIRA kulcsokat
+            const commitMessages = document.querySelectorAll('.gl-card-body .commit-content');
+            let pageContent = Array.from(commitMessages)
+                .map(element => element.textContent)
+                .join(' ');
+
             const jiraKeys = findJiraKeys(pageContent, settings.jiraPrefixes);
             const jql = generateJQL(jiraKeys);
 
@@ -301,13 +306,17 @@
 
     // Ajánlások frissítése
     function updateSuggestions() {
-        const pageContent = document.body.innerText;
+        const commitMessages = document.querySelectorAll('.gl-card-body .commit-content');
+        let pageContent = Array.from(commitMessages)
+            .map(element => element.textContent)
+            .join(' ');
+
         const suggestions = generatePrefixSuggestions(pageContent);
         const suggestionsDiv = document.querySelector('#prefixSuggestions');
 
         if (suggestions.length > 0) {
             suggestionsDiv.innerHTML = `
-                <h4>Suggested Prefixes Found on Page:</h4>
+                <h4>Suggested Prefixes Found in Commits:</h4>
                 <p>${suggestions.join(', ')}</p>
                 <button class="jira-extractor-button" id="useSuggestions">Use These Prefixes</button>
             `;
