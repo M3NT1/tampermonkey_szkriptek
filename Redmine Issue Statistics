@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Redmine Issue Statistics
 // @namespace    http://tampermonkey.net/
-// @version      0.9
+// @version      1.1
 // @description  Display sorted statistics for open Redmine issues excluding closed, rejected, and non-bug issues
 // @match        https://projekt.nak.hu/projects/nak_projekt-saphkq/issues*
 // @grant        none
@@ -14,15 +14,27 @@
     const bugClassOrder = ['A - Végzetes', 'B - Súlyos', 'C - Jelentős', 'D - Egyéb'];
     const excludedStatuses = ['Lezárva', 'Elutasítva', 'Nem hiba'];
     const highlightedStatuses = ['Hibajavításra átadva', 'Hibajavítás folyamatban'];
+    const supplierStatuses = ['Hibajavítás folyamatban', 'Hibajavításra átadva'];
+    const nakStatuses = ['Tesztelhető', 'Rögzített'];
+
+    function shouldIncludeIssue(status) {
+        return !excludedStatuses.includes(status);
+    }
 
     function createStatistics() {
         const issues = document.querySelectorAll('table.issues tr.issue');
-        console.log('Found issues:', issues.length); // Debug log
+        console.log('Found issues:', issues.length);
 
         const stats = {};
         let totalCount = 0;
-        const bugClassTotals = {};
-        const priorityTotals = {};
+        const bugClassTotals = {
+            supplier: {},
+            nak: {}
+        };
+        const priorityTotals = {
+            supplier: {},
+            nak: {}
+        };
 
         issues.forEach(issue => {
             try {
@@ -31,7 +43,7 @@
                 const statusElement = issue.querySelector('td.status');
 
                 if (!priorityElement || !bugClassElement || !statusElement) {
-                    console.log('Missing elements for issue:', issue); // Debug log
+                    console.log('Missing elements for issue:', issue);
                     return;
                 }
 
@@ -39,9 +51,7 @@
                 const bugClass = bugClassElement.textContent.trim();
                 const status = statusElement.textContent.trim();
 
-                console.log('Processing issue:', { priority, bugClass, status }); // Debug log
-
-                if (!excludedStatuses.includes(status)) {
+                if (shouldIncludeIssue(status)) {
                     if (!stats[priority]) stats[priority] = {};
                     if (!stats[priority][bugClass]) stats[priority][bugClass] = {};
                     if (!stats[priority][bugClass][status]) stats[priority][bugClass][status] = 0;
@@ -49,19 +59,67 @@
                     stats[priority][bugClass][status]++;
                     totalCount++;
 
-                    if (!bugClassTotals[bugClass]) bugClassTotals[bugClass] = 0;
-                    bugClassTotals[bugClass]++;
+                    // Szállító statisztikák
+                    if (supplierStatuses.includes(status)) {
+                        if (!bugClassTotals.supplier[bugClass]) bugClassTotals.supplier[bugClass] = 0;
+                        bugClassTotals.supplier[bugClass]++;
 
-                    if (!priorityTotals[priority]) priorityTotals[priority] = 0;
-                    priorityTotals[priority]++;
+                        if (!priorityTotals.supplier[priority]) priorityTotals.supplier[priority] = 0;
+                        priorityTotals.supplier[priority]++;
+                    }
+                    // NAK statisztikák
+                    else if (nakStatuses.includes(status)) {
+                        if (!bugClassTotals.nak[bugClass]) bugClassTotals.nak[bugClass] = 0;
+                        bugClassTotals.nak[bugClass]++;
+
+                        if (!priorityTotals.nak[priority]) priorityTotals.nak[priority] = 0;
+                        priorityTotals.nak[priority]++;
+                    }
                 }
             } catch (error) {
                 console.error('Error processing issue:', error);
             }
         });
 
-        console.log('Statistics created:', { stats, totalCount, bugClassTotals, priorityTotals }); // Debug log
+        console.log('Statistics created:', {
+            stats,
+            totalCount,
+            bugClassTotals,
+            priorityTotals,
+            excludedStatusesCount: issues.length - totalCount
+        });
+
         return { stats, totalCount, bugClassTotals, priorityTotals };
+    }
+
+    function addSectionHeader(table, text, backgroundColor = '#f5f5f5') {
+        const header = table.insertRow();
+        const cell = header.insertCell();
+        cell.colSpan = 4;
+        cell.textContent = text;
+        cell.style.backgroundColor = backgroundColor;
+        cell.style.fontWeight = 'bold';
+        cell.style.border = '1px solid #ccc';
+        cell.style.padding = '5px';
+    }
+
+    function addTotalRow(table, label, items) {
+        Object.entries(items).forEach(([key, value]) => {
+            if (value > 0) {
+                const row = table.insertRow();
+                const labelCell = row.insertCell();
+                labelCell.colSpan = 3;
+                labelCell.textContent = key;
+                labelCell.style.textAlign = 'right';
+                labelCell.style.border = '1px solid #ccc';
+                labelCell.style.padding = '5px';
+
+                const valueCell = row.insertCell();
+                valueCell.textContent = value;
+                valueCell.style.border = '1px solid #ccc';
+                valueCell.style.padding = '5px';
+            }
+        });
     }
 
     function displayStatistics(stats, totalCount, bugClassTotals, priorityTotals) {
@@ -71,7 +129,6 @@
             return;
         }
 
-        // Remove existing statistics if present
         const existingStats = document.getElementById('issue-statistics');
         if (existingStats) {
             existingStats.remove();
@@ -110,30 +167,17 @@
                             const count = stats[priority][bugClass][status];
                             const row = table.insertRow();
 
-                            // Create cells
-                            const priorityCell = row.insertCell();
-                            const bugClassCell = row.insertCell();
-                            const statusCell = row.insertCell();
-                            const countCell = row.insertCell();
-
-                            // Set content and styles
-                            priorityCell.textContent = priority;
-                            bugClassCell.textContent = bugClass;
-                            statusCell.textContent = status;
-                            countCell.textContent = count;
-
-                            // Apply common styles
-                            [priorityCell, bugClassCell, statusCell, countCell].forEach(cell => {
-                                if (cell) {
-                                    cell.style.border = '1px solid #ccc';
-                                    cell.style.padding = '5px';
-                                }
+                            const cells = [priority, bugClass, status, count].map(text => {
+                                const cell = row.insertCell();
+                                cell.textContent = text;
+                                cell.style.border = '1px solid #ccc';
+                                cell.style.padding = '5px';
+                                return cell;
                             });
 
-                            // Apply highlight if needed
                             if (highlightedStatuses.includes(status)) {
-                                statusCell.style.color = '#ff0000';
-                                countCell.style.color = '#ff0000';
+                                cells[2].style.color = '#ff0000';
+                                cells[3].style.color = '#ff0000';
                             }
                         }
                     }
@@ -141,13 +185,12 @@
             }
         }
 
-        // Separator row
+        // Separator and total
         const separatorRow = table.insertRow();
         const separatorCell = separatorRow.insertCell();
         separatorCell.colSpan = 4;
         separatorCell.style.borderTop = '2px solid #666';
 
-        // Total row
         const totalRow = table.insertRow();
         const totalLabelCell = totalRow.insertCell();
         totalLabelCell.colSpan = 3;
@@ -162,66 +205,29 @@
         totalValueCell.style.border = '1px solid #ccc';
         totalValueCell.style.padding = '5px';
 
-        // Bug class totals
-        const bugClassHeader = table.insertRow();
-        const bugClassHeaderCell = bugClassHeader.insertCell();
-        bugClassHeaderCell.colSpan = 4;
-        bugClassHeaderCell.textContent = 'Hiba osztály szerinti összesítés:';
-        bugClassHeaderCell.style.backgroundColor = '#f5f5f5';
-        bugClassHeaderCell.style.fontWeight = 'bold';
-        bugClassHeaderCell.style.border = '1px solid #ccc';
-        bugClassHeaderCell.style.padding = '5px';
+        // Szállítónál lévő feladatok
+        addSectionHeader(table, 'Szállítónál lévő feladatok:', '#ffebee');
 
-        for (const bugClass of bugClassOrder) {
-            if (bugClassTotals[bugClass]) {
-                const row = table.insertRow();
-                const labelCell = row.insertCell();
-                labelCell.colSpan = 3;
-                labelCell.textContent = bugClass;
-                labelCell.style.textAlign = 'right';
-                labelCell.style.border = '1px solid #ccc';
-                labelCell.style.padding = '5px';
+        addSectionHeader(table, 'Hiba osztály szerinti összesítés:', '#fff3f3');
+        addTotalRow(table, 'Hiba osztály', bugClassTotals.supplier);
 
-                const valueCell = row.insertCell();
-                valueCell.textContent = bugClassTotals[bugClass];
-                valueCell.style.border = '1px solid #ccc';
-                valueCell.style.padding = '5px';
-            }
-        }
+        addSectionHeader(table, 'Prioritás szerinti összesítés:', '#fff3f3');
+        addTotalRow(table, 'Prioritás', priorityTotals.supplier);
 
-        // Priority totals
-        const priorityHeader = table.insertRow();
-        const priorityHeaderCell = priorityHeader.insertCell();
-        priorityHeaderCell.colSpan = 4;
-        priorityHeaderCell.textContent = 'Prioritás szerinti összesítés:';
-        priorityHeaderCell.style.backgroundColor = '#f5f5f5';
-        priorityHeaderCell.style.fontWeight = 'bold';
-        priorityHeaderCell.style.border = '1px solid #ccc';
-        priorityHeaderCell.style.padding = '5px';
+        // NAK-nál lévő feladatok
+        addSectionHeader(table, 'NAK-nál lévő feladatok:', '#e8f5e9');
 
-        for (const priority of priorityOrder) {
-            if (priorityTotals[priority]) {
-                const row = table.insertRow();
-                const labelCell = row.insertCell();
-                labelCell.colSpan = 3;
-                labelCell.textContent = priority;
-                labelCell.style.textAlign = 'right';
-                labelCell.style.border = '1px solid #ccc';
-                labelCell.style.padding = '5px';
+        addSectionHeader(table, 'Hiba osztály szerinti összesítés:', '#f1f8f1');
+        addTotalRow(table, 'Hiba osztály', bugClassTotals.nak);
 
-                const valueCell = row.insertCell();
-                valueCell.textContent = priorityTotals[priority];
-                valueCell.style.border = '1px solid #ccc';
-                valueCell.style.padding = '5px';
-            }
-        }
+        addSectionHeader(table, 'Prioritás szerinti összesítés:', '#f1f8f1');
+        addTotalRow(table, 'Prioritás', priorityTotals.nak);
 
         statsDiv.appendChild(table);
         sidebar.insertBefore(statsDiv, sidebar.firstChild);
     }
 
     function init() {
-        // Wait for the page to be fully loaded
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', afterLoad);
         } else {
@@ -230,7 +236,6 @@
     }
 
     function afterLoad() {
-        // Give a little extra time for any dynamic content to load
         setTimeout(() => {
             try {
                 const sidebar = document.getElementById('sidebar');
@@ -258,6 +263,5 @@
         }, 1500);
     }
 
-    // Start the script
     init();
 })();
