@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Redmine Issue Statistics
 // @namespace    http://tampermonkey.net/
-// @version      0.5
+// @version      0.9
 // @description  Display sorted statistics for open Redmine issues excluding closed, rejected, and non-bug issues
 // @match        https://projekt.nak.hu/projects/nak_projekt-saphkq/issues*
 // @grant        none
@@ -13,38 +13,69 @@
     const priorityOrder = ['Azonnali', 'Sürgős', 'Magas', 'Normal', 'Alacsony'];
     const bugClassOrder = ['A - Végzetes', 'B - Súlyos', 'C - Jelentős', 'D - Egyéb'];
     const excludedStatuses = ['Lezárva', 'Elutasítva', 'Nem hiba'];
+    const highlightedStatuses = ['Hibajavításra átadva', 'Hibajavítás folyamatban'];
 
     function createStatistics() {
         const issues = document.querySelectorAll('table.issues tr.issue');
+        console.log('Found issues:', issues.length); // Debug log
+
         const stats = {};
         let totalCount = 0;
+        const bugClassTotals = {};
+        const priorityTotals = {};
 
         issues.forEach(issue => {
-            const priority = issue.querySelector('td.priority').textContent.trim();
-            const bugClass = issue.querySelector('td.cf_283').textContent.trim();
-            const status = issue.querySelector('td.status').textContent.trim();
+            try {
+                const priorityElement = issue.querySelector('td.priority');
+                const bugClassElement = issue.querySelector('td.cf_283');
+                const statusElement = issue.querySelector('td.status');
 
-            if (!excludedStatuses.includes(status)) {
-                if (!stats[priority]) {
-                    stats[priority] = {};
+                if (!priorityElement || !bugClassElement || !statusElement) {
+                    console.log('Missing elements for issue:', issue); // Debug log
+                    return;
                 }
-                if (!stats[priority][bugClass]) {
-                    stats[priority][bugClass] = {};
+
+                const priority = priorityElement.textContent.trim();
+                const bugClass = bugClassElement.textContent.trim();
+                const status = statusElement.textContent.trim();
+
+                console.log('Processing issue:', { priority, bugClass, status }); // Debug log
+
+                if (!excludedStatuses.includes(status)) {
+                    if (!stats[priority]) stats[priority] = {};
+                    if (!stats[priority][bugClass]) stats[priority][bugClass] = {};
+                    if (!stats[priority][bugClass][status]) stats[priority][bugClass][status] = 0;
+
+                    stats[priority][bugClass][status]++;
+                    totalCount++;
+
+                    if (!bugClassTotals[bugClass]) bugClassTotals[bugClass] = 0;
+                    bugClassTotals[bugClass]++;
+
+                    if (!priorityTotals[priority]) priorityTotals[priority] = 0;
+                    priorityTotals[priority]++;
                 }
-                if (!stats[priority][bugClass][status]) {
-                    stats[priority][bugClass][status] = 0;
-                }
-                stats[priority][bugClass][status]++;
-                totalCount++;
+            } catch (error) {
+                console.error('Error processing issue:', error);
             }
         });
 
-        return { stats, totalCount };
+        console.log('Statistics created:', { stats, totalCount, bugClassTotals, priorityTotals }); // Debug log
+        return { stats, totalCount, bugClassTotals, priorityTotals };
     }
 
-    function displayStatistics(stats, totalCount) {
+    function displayStatistics(stats, totalCount, bugClassTotals, priorityTotals) {
         const sidebar = document.getElementById('sidebar');
-        const tasksHeader = sidebar.querySelector('h3');
+        if (!sidebar) {
+            console.error('Sidebar not found');
+            return;
+        }
+
+        // Remove existing statistics if present
+        const existingStats = document.getElementById('issue-statistics');
+        if (existingStats) {
+            existingStats.remove();
+        }
 
         const statsDiv = document.createElement('div');
         statsDiv.id = 'issue-statistics';
@@ -59,6 +90,7 @@
         table.style.borderCollapse = 'collapse';
         table.style.fontSize = '12px';
 
+        // Header row
         const headerRow = table.insertRow();
         ['Prioritás', 'Hiba osztály', 'Státusz', 'Darabszám'].forEach(text => {
             const th = document.createElement('th');
@@ -68,49 +100,164 @@
             headerRow.appendChild(th);
         });
 
-        // Sort and display statistics
-        priorityOrder.forEach(priority => {
+        // Main statistics rows
+        for (const priority of priorityOrder) {
             if (stats[priority]) {
-                bugClassOrder.forEach(bugClass => {
+                for (const bugClass of bugClassOrder) {
                     if (stats[priority][bugClass]) {
-                        Object.keys(stats[priority][bugClass]).sort().forEach(status => {
+                        const statuses = Object.keys(stats[priority][bugClass]).sort();
+                        for (const status of statuses) {
                             const count = stats[priority][bugClass][status];
                             const row = table.insertRow();
-                            [priority, bugClass, status, count].forEach(text => {
-                                const cell = row.insertCell();
-                                cell.textContent = text;
-                                cell.style.border = '1px solid #ccc';
-                                cell.style.padding = '5px';
-                            });
-                        });
-                    }
-                });
-            }
-        });
 
-        // Add total count row
+                            // Create cells
+                            const priorityCell = row.insertCell();
+                            const bugClassCell = row.insertCell();
+                            const statusCell = row.insertCell();
+                            const countCell = row.insertCell();
+
+                            // Set content and styles
+                            priorityCell.textContent = priority;
+                            bugClassCell.textContent = bugClass;
+                            statusCell.textContent = status;
+                            countCell.textContent = count;
+
+                            // Apply common styles
+                            [priorityCell, bugClassCell, statusCell, countCell].forEach(cell => {
+                                if (cell) {
+                                    cell.style.border = '1px solid #ccc';
+                                    cell.style.padding = '5px';
+                                }
+                            });
+
+                            // Apply highlight if needed
+                            if (highlightedStatuses.includes(status)) {
+                                statusCell.style.color = '#ff0000';
+                                countCell.style.color = '#ff0000';
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Separator row
+        const separatorRow = table.insertRow();
+        const separatorCell = separatorRow.insertCell();
+        separatorCell.colSpan = 4;
+        separatorCell.style.borderTop = '2px solid #666';
+
+        // Total row
         const totalRow = table.insertRow();
-        totalRow.style.fontWeight = 'bold';
-        const totalCell = totalRow.insertCell();
-        totalCell.colSpan = 3;
-        totalCell.textContent = 'Összesen:';
-        totalCell.style.border = '1px solid #ccc';
-        totalCell.style.padding = '5px';
-        totalCell.style.textAlign = 'right';
-        const totalCountCell = totalRow.insertCell();
-        totalCountCell.textContent = totalCount;
-        totalCountCell.style.border = '1px solid #ccc';
-        totalCountCell.style.padding = '5px';
+        const totalLabelCell = totalRow.insertCell();
+        totalLabelCell.colSpan = 3;
+        totalLabelCell.textContent = 'Összesen:';
+        totalLabelCell.style.textAlign = 'right';
+        totalLabelCell.style.fontWeight = 'bold';
+        totalLabelCell.style.border = '1px solid #ccc';
+        totalLabelCell.style.padding = '5px';
+
+        const totalValueCell = totalRow.insertCell();
+        totalValueCell.textContent = totalCount;
+        totalValueCell.style.border = '1px solid #ccc';
+        totalValueCell.style.padding = '5px';
+
+        // Bug class totals
+        const bugClassHeader = table.insertRow();
+        const bugClassHeaderCell = bugClassHeader.insertCell();
+        bugClassHeaderCell.colSpan = 4;
+        bugClassHeaderCell.textContent = 'Hiba osztály szerinti összesítés:';
+        bugClassHeaderCell.style.backgroundColor = '#f5f5f5';
+        bugClassHeaderCell.style.fontWeight = 'bold';
+        bugClassHeaderCell.style.border = '1px solid #ccc';
+        bugClassHeaderCell.style.padding = '5px';
+
+        for (const bugClass of bugClassOrder) {
+            if (bugClassTotals[bugClass]) {
+                const row = table.insertRow();
+                const labelCell = row.insertCell();
+                labelCell.colSpan = 3;
+                labelCell.textContent = bugClass;
+                labelCell.style.textAlign = 'right';
+                labelCell.style.border = '1px solid #ccc';
+                labelCell.style.padding = '5px';
+
+                const valueCell = row.insertCell();
+                valueCell.textContent = bugClassTotals[bugClass];
+                valueCell.style.border = '1px solid #ccc';
+                valueCell.style.padding = '5px';
+            }
+        }
+
+        // Priority totals
+        const priorityHeader = table.insertRow();
+        const priorityHeaderCell = priorityHeader.insertCell();
+        priorityHeaderCell.colSpan = 4;
+        priorityHeaderCell.textContent = 'Prioritás szerinti összesítés:';
+        priorityHeaderCell.style.backgroundColor = '#f5f5f5';
+        priorityHeaderCell.style.fontWeight = 'bold';
+        priorityHeaderCell.style.border = '1px solid #ccc';
+        priorityHeaderCell.style.padding = '5px';
+
+        for (const priority of priorityOrder) {
+            if (priorityTotals[priority]) {
+                const row = table.insertRow();
+                const labelCell = row.insertCell();
+                labelCell.colSpan = 3;
+                labelCell.textContent = priority;
+                labelCell.style.textAlign = 'right';
+                labelCell.style.border = '1px solid #ccc';
+                labelCell.style.padding = '5px';
+
+                const valueCell = row.insertCell();
+                valueCell.textContent = priorityTotals[priority];
+                valueCell.style.border = '1px solid #ccc';
+                valueCell.style.padding = '5px';
+            }
+        }
 
         statsDiv.appendChild(table);
-        sidebar.insertBefore(statsDiv, tasksHeader);
+        sidebar.insertBefore(statsDiv, sidebar.firstChild);
     }
 
     function init() {
-        const { stats, totalCount } = createStatistics();
-        displayStatistics(stats, totalCount);
+        // Wait for the page to be fully loaded
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', afterLoad);
+        } else {
+            afterLoad();
+        }
     }
 
-    // Run the script after a short delay to ensure the page is fully loaded
-    setTimeout(init, 1000);
+    function afterLoad() {
+        // Give a little extra time for any dynamic content to load
+        setTimeout(() => {
+            try {
+                const sidebar = document.getElementById('sidebar');
+                const issuesTable = document.querySelector('table.issues');
+
+                if (!sidebar || !issuesTable) {
+                    console.error('Required elements not found:', { sidebar: !!sidebar, issuesTable: !!issuesTable });
+                    return;
+                }
+
+                const statistics = createStatistics();
+                if (statistics && statistics.totalCount > 0) {
+                    displayStatistics(
+                        statistics.stats,
+                        statistics.totalCount,
+                        statistics.bugClassTotals,
+                        statistics.priorityTotals
+                    );
+                } else {
+                    console.error('No valid statistics generated');
+                }
+            } catch (error) {
+                console.error('Error in afterLoad:', error);
+            }
+        }, 1500);
+    }
+
+    // Start the script
+    init();
 })();
