@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Redmine Issue Statistics
 // @namespace    http://tampermonkey.net/
-// @version      1.1
+// @version      1.3
 // @description  Display sorted statistics for open Redmine issues excluding closed, rejected, and non-bug issues
 // @match        https://projekt.nak.hu/projects/nak_projekt-saphkq/issues*
 // @grant        none
@@ -17,8 +17,132 @@
     const supplierStatuses = ['Hibajavítás folyamatban', 'Hibajavításra átadva'];
     const nakStatuses = ['Tesztelhető', 'Rögzített'];
 
+    let issuesByCategory = {
+        supplier: {
+            byBugClass: {},
+            byPriority: {}
+        },
+        nak: {
+            byBugClass: {},
+            byPriority: {}
+        }
+    };
+
     function shouldIncludeIssue(status) {
         return !excludedStatuses.includes(status);
+    }
+
+    function createModal() {
+        const modal = document.createElement('div');
+        modal.id = 'issue-details-modal';
+        modal.style.cssText = `
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: white;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 1000;
+            max-width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+        `;
+
+        const overlay = document.createElement('div');
+        overlay.id = 'modal-overlay';
+        overlay.style.cssText = `
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0,0,0,0.5);
+            z-index: 999;
+        `;
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(modal);
+
+        overlay.addEventListener('click', () => {
+            modal.style.display = 'none';
+            overlay.style.display = 'none';
+        });
+
+        return { modal, overlay };
+    }
+
+    function showIssueDetails(issues) {
+        const { modal, overlay } = document.getElementById('issue-details-modal') ?
+            {
+                modal: document.getElementById('issue-details-modal'),
+                overlay: document.getElementById('modal-overlay')
+            } : createModal();
+
+        const table = document.createElement('table');
+        table.style.cssText = `
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+            font-size: 12px;
+        `;
+
+        const headers = ['Jegy', 'Státusz', 'Tárgy', 'Prioritás', 'Hiba osztály', 'Felelős', 'Szállítói jegy'];
+        const headerRow = table.insertRow();
+        headers.forEach(header => {
+            const th = document.createElement('th');
+            th.textContent = header;
+            th.style.cssText = `
+                border: 1px solid #ccc;
+                padding: 8px;
+                background-color: #f5f5f5;
+                text-align: left;
+            `;
+            headerRow.appendChild(th);
+        });
+
+        issues.forEach(issue => {
+            const row = table.insertRow();
+            const cells = [
+                `#${issue.id}`,
+                issue.status,
+                issue.subject,
+                issue.priority,
+                issue.bugClass,
+                issue.assignee,
+                issue.supplierTicket
+            ];
+
+            cells.forEach((cellText, index) => {
+                const cell = row.insertCell();
+                if (index === 0) {
+                    cell.innerHTML = `<a href="/issues/${issue.id}" target="_blank">#${issue.id}</a>`;
+                } else if (index === 6) {
+                    cell.innerHTML = cellText || '-';
+                } else {
+                    cell.textContent = cellText || '-';
+                }
+                cell.style.cssText = `
+                    border: 1px solid #ccc;
+                    padding: 8px;
+                `;
+            });
+        });
+
+        modal.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h3 style="margin: 0;">Jegyek részletei (${issues.length} db)</h3>
+                <button onclick="this.parentElement.parentElement.style.display='none';document.getElementById('modal-overlay').style.display='none';"
+                        style="border: none; background: none; cursor: pointer; font-size: 20px;">×</button>
+            </div>
+        `;
+        modal.appendChild(table);
+
+        modal.style.display = 'block';
+        overlay.style.display = 'block';
     }
 
     function createStatistics() {
@@ -36,11 +160,26 @@
             nak: {}
         };
 
+        issuesByCategory = {
+            supplier: {
+                byBugClass: {},
+                byPriority: {}
+            },
+            nak: {
+                byBugClass: {},
+                byPriority: {}
+            }
+        };
+
         issues.forEach(issue => {
             try {
+                const id = issue.getAttribute('id').replace('issue-', '');
                 const priorityElement = issue.querySelector('td.priority');
                 const bugClassElement = issue.querySelector('td.cf_283');
                 const statusElement = issue.querySelector('td.status');
+                const subjectElement = issue.querySelector('td.subject');
+                const assigneeElement = issue.querySelector('td.assigned_to');
+                const supplierTicketElement = issue.querySelector('td.cf_296.link a');
 
                 if (!priorityElement || !bugClassElement || !statusElement) {
                     console.log('Missing elements for issue:', issue);
@@ -50,6 +189,21 @@
                 const priority = priorityElement.textContent.trim();
                 const bugClass = bugClassElement.textContent.trim();
                 const status = statusElement.textContent.trim();
+                const subject = subjectElement ? subjectElement.textContent.trim() : '';
+                const assignee = assigneeElement ? assigneeElement.textContent.trim() : '';
+                const supplierTicket = supplierTicketElement ?
+                    `<a href="${supplierTicketElement.href}" target="_blank">${supplierTicketElement.textContent}</a>` :
+                    '';
+
+                const issueData = {
+                    id,
+                    status,
+                    subject,
+                    priority,
+                    bugClass,
+                    assignee,
+                    supplierTicket
+                };
 
                 if (shouldIncludeIssue(status)) {
                     if (!stats[priority]) stats[priority] = {};
@@ -59,34 +213,42 @@
                     stats[priority][bugClass][status]++;
                     totalCount++;
 
-                    // Szállító statisztikák
                     if (supplierStatuses.includes(status)) {
                         if (!bugClassTotals.supplier[bugClass]) bugClassTotals.supplier[bugClass] = 0;
                         bugClassTotals.supplier[bugClass]++;
 
                         if (!priorityTotals.supplier[priority]) priorityTotals.supplier[priority] = 0;
                         priorityTotals.supplier[priority]++;
+
+                        if (!issuesByCategory.supplier.byBugClass[bugClass]) {
+                            issuesByCategory.supplier.byBugClass[bugClass] = [];
+                        }
+                        if (!issuesByCategory.supplier.byPriority[priority]) {
+                            issuesByCategory.supplier.byPriority[priority] = [];
+                        }
+                        issuesByCategory.supplier.byBugClass[bugClass].push(issueData);
+                        issuesByCategory.supplier.byPriority[priority].push(issueData);
                     }
-                    // NAK statisztikák
                     else if (nakStatuses.includes(status)) {
                         if (!bugClassTotals.nak[bugClass]) bugClassTotals.nak[bugClass] = 0;
                         bugClassTotals.nak[bugClass]++;
 
                         if (!priorityTotals.nak[priority]) priorityTotals.nak[priority] = 0;
                         priorityTotals.nak[priority]++;
+
+                        if (!issuesByCategory.nak.byBugClass[bugClass]) {
+                            issuesByCategory.nak.byBugClass[bugClass] = [];
+                        }
+                        if (!issuesByCategory.nak.byPriority[priority]) {
+                            issuesByCategory.nak.byPriority[priority] = [];
+                        }
+                        issuesByCategory.nak.byBugClass[bugClass].push(issueData);
+                        issuesByCategory.nak.byPriority[priority].push(issueData);
                     }
                 }
             } catch (error) {
                 console.error('Error processing issue:', error);
             }
-        });
-
-        console.log('Statistics created:', {
-            stats,
-            totalCount,
-            bugClassTotals,
-            priorityTotals,
-            excludedStatusesCount: issues.length - totalCount
         });
 
         return { stats, totalCount, bugClassTotals, priorityTotals };
@@ -103,7 +265,7 @@
         cell.style.padding = '5px';
     }
 
-    function addTotalRow(table, label, items) {
+    function addTotalRow(table, label, items, category, type) {
         Object.entries(items).forEach(([key, value]) => {
             if (value > 0) {
                 const row = table.insertRow();
@@ -113,6 +275,16 @@
                 labelCell.style.textAlign = 'right';
                 labelCell.style.border = '1px solid #ccc';
                 labelCell.style.padding = '5px';
+                labelCell.style.cursor = 'pointer';
+                labelCell.style.color = '#0000EE';
+                labelCell.style.textDecoration = 'underline';
+
+                labelCell.addEventListener('click', () => {
+                    const issues = type === 'bugClass' ?
+                        issuesByCategory[category].byBugClass[key] :
+                        issuesByCategory[category].byPriority[key];
+                    showIssueDetails(issues);
+                });
 
                 const valueCell = row.insertCell();
                 valueCell.textContent = value;
@@ -147,7 +319,6 @@
         table.style.borderCollapse = 'collapse';
         table.style.fontSize = '12px';
 
-        // Header row
         const headerRow = table.insertRow();
         ['Prioritás', 'Hiba osztály', 'Státusz', 'Darabszám'].forEach(text => {
             const th = document.createElement('th');
@@ -157,7 +328,6 @@
             headerRow.appendChild(th);
         });
 
-        // Main statistics rows
         for (const priority of priorityOrder) {
             if (stats[priority]) {
                 for (const bugClass of bugClassOrder) {
@@ -185,7 +355,6 @@
             }
         }
 
-        // Separator and total
         const separatorRow = table.insertRow();
         const separatorCell = separatorRow.insertCell();
         separatorCell.colSpan = 4;
@@ -205,23 +374,21 @@
         totalValueCell.style.border = '1px solid #ccc';
         totalValueCell.style.padding = '5px';
 
-        // Szállítónál lévő feladatok
         addSectionHeader(table, 'Szállítónál lévő feladatok:', '#ffebee');
 
         addSectionHeader(table, 'Hiba osztály szerinti összesítés:', '#fff3f3');
-        addTotalRow(table, 'Hiba osztály', bugClassTotals.supplier);
+        addTotalRow(table, 'Hiba osztály', bugClassTotals.supplier, 'supplier', 'bugClass');
 
         addSectionHeader(table, 'Prioritás szerinti összesítés:', '#fff3f3');
-        addTotalRow(table, 'Prioritás', priorityTotals.supplier);
+        addTotalRow(table, 'Prioritás', priorityTotals.supplier, 'supplier', 'priority');
 
-        // NAK-nál lévő feladatok
         addSectionHeader(table, 'NAK-nál lévő feladatok:', '#e8f5e9');
 
         addSectionHeader(table, 'Hiba osztály szerinti összesítés:', '#f1f8f1');
-        addTotalRow(table, 'Hiba osztály', bugClassTotals.nak);
+        addTotalRow(table, 'Hiba osztály', bugClassTotals.nak, 'nak', 'bugClass');
 
         addSectionHeader(table, 'Prioritás szerinti összesítés:', '#f1f8f1');
-        addTotalRow(table, 'Prioritás', priorityTotals.nak);
+        addTotalRow(table, 'Prioritás', priorityTotals.nak, 'nak', 'priority');
 
         statsDiv.appendChild(table);
         sidebar.insertBefore(statsDiv, sidebar.firstChild);
