@@ -1,0 +1,77 @@
+// ==UserScript==
+// @name         NAK RT Jira Link Converter
+// @namespace    http://tampermonkey.net/
+// @version      1.1
+// @description  Convert plain text JIRA links to clickable links in NAK RT
+// @author       M3NT1
+// @match        https://rt5.nak.hu/Ticket/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // Várunk egy kis időt, hogy az oldal teljesen betöltődjön
+    setTimeout(function() {
+        // Megkeressük a célmezőt
+        const targetDiv = document.querySelector('div[id="CF-24-ShowRow"] .current-value');
+
+        if (!targetDiv) return;
+
+        // Az eredeti szöveg megszerzése és HTML entities dekódolása
+        let originalText = targetDiv.innerHTML;
+        const textarea = document.createElement('textarea');
+        textarea.innerHTML = originalText;
+        originalText = textarea.value;
+
+        // Egy függvény a találatok feldolgozására
+        function processMatches(text) {
+            // Először keressük meg az összes lehetséges egyezést
+            const matches = text.match(/(https?:\/\/jira\.ulyssys\.hu\/browse\/[A-Z]+-\d+|jira\.ulyssys\.hu\/browse\/[A-Z]+-\d+|[A-Z]+-\d+)/g);
+
+            if (!matches) return text;
+
+            // Egyedi találatok kiszűrése és rendezése hossz szerint csökkenő sorrendben
+            const uniqueMatches = [...new Set(matches)].sort((a, b) => b.length - a.length);
+
+            // Minden találatot feldolgozunk
+            uniqueMatches.forEach(match => {
+                let url;
+                if (match.startsWith('https://')) {
+                    url = match;
+                } else if (match.startsWith('http://')) {
+                    url = 'https://' + match.substring(7);
+                } else if (match.startsWith('jira.')) {
+                    url = 'https://' + match;
+                } else {
+                    // Ha csak ticket azonosító
+                    url = 'https://jira.ulyssys.hu/browse/' + match;
+                }
+
+                // Escape special characters in the match for use in RegExp
+                const escapedMatch = match.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const regex = new RegExp(escapedMatch, 'g');
+
+                text = text.replace(regex, `<a href="${url}" target="_blank" style="color: #0000EE; text-decoration: underline;">${match}</a>`);
+            });
+
+            return text;
+        }
+
+        // Feldolgozzuk a szöveget
+        const newText = processMatches(originalText);
+
+        // Az új HTML beállítása
+        targetDiv.innerHTML = newText;
+
+        // Az összes link megnyitása új ablakban
+        const links = targetDiv.getElementsByTagName('a');
+        for(let link of links) {
+            link.target = '_blank';
+            // Prevent default RT click behavior
+            link.addEventListener('click', function(e) {
+                e.stopPropagation();
+            });
+        }
+    }, 1000);
+})();
