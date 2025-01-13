@@ -1,0 +1,163 @@
+// ==UserScript==
+// @name         JIRA Issue Collector
+// @namespace    http://tampermonkey.net/
+// @version      2.0
+// @description  Collect JIRA issues data with grouping by assignee from all pages
+// @author       M3NT1
+// @match        https://jira.ulyssys.hu/issues/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    window.addEventListener('load', function() {
+        const scriptRunnerBtn = document.querySelector('#sr-jql-query-builder');
+        if (!scriptRunnerBtn) return;
+
+        const collectButton = document.createElement('button');
+        collectButton.className = 'aui-button aui-button-subtle';
+        collectButton.style.marginLeft = '5px';
+        collectButton.style.backgroundColor = '#18989c';
+        collectButton.style.color = 'white';
+        collectButton.style.borderColor = '#18989c';
+        // Hover effect hozzáadása
+        collectButton.addEventListener('mouseover', function() {
+            this.style.backgroundColor = '#147579';
+            this.style.borderColor = '#147579';
+        });
+        collectButton.addEventListener('mouseout', function() {
+            this.style.backgroundColor = '#18989c';
+            this.style.borderColor = '#18989c';
+        });
+        
+        collectButton.textContent = 'Collect All Issues';
+        collectButton.setAttribute('resolved', '');
+
+        scriptRunnerBtn.parentNode.insertBefore(collectButton, scriptRunnerBtn.nextSibling);
+
+        async function getAllIssues() {
+            const baseUrl = window.location.origin;
+            const issuesByAssignee = {};
+            
+            const jqlInput = document.querySelector('#jql').value;
+            const startIndex = 0;
+            
+            const totalResults = parseInt(document.querySelector('.results-count-total').textContent);
+            const batchSize = 50;
+            
+            const progressDiv = document.createElement('div');
+            progressDiv.style.position = 'fixed';
+            progressDiv.style.top = '50%';
+            progressDiv.style.left = '50%';
+            progressDiv.style.transform = 'translate(-50%, -50%)';
+            progressDiv.style.padding = '20px';
+            progressDiv.style.background = 'white';
+            progressDiv.style.border = '1px solid #ccc';
+            progressDiv.style.borderRadius = '5px';
+            progressDiv.style.zIndex = '10000';
+            document.body.appendChild(progressDiv);
+
+            try {
+                for(let startAt = 0; startAt < totalResults; startAt += batchSize) {
+                    progressDiv.textContent = `Collecting issues ${startAt + 1} to ${Math.min(startAt + batchSize, totalResults)} of ${totalResults}...`;
+                    
+                    const url = `${baseUrl}/issues/?jql=${encodeURIComponent(jqlInput)}&startIndex=${startAt}`;
+                    
+                    const response = await fetch(url);
+                    const text = await response.text();
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(text, 'text/html');
+                    
+                    const rows = doc.querySelectorAll('tr.issuerow');
+                    
+                    rows.forEach(row => {
+                        const key = row.querySelector('td.issuekey a').textContent.trim();
+                        const summaryCell = row.querySelector('td.summary');
+                        
+                        const summaryLinks = summaryCell.querySelectorAll('a.issue-link');
+                        let summary = '';
+                        
+                        if (summaryLinks.length > 1) {
+                            summary = summaryLinks[summaryLinks.length - 1].textContent.trim();
+                        } else {
+                            summary = summaryLinks[0].textContent.trim();
+                        }
+                        
+                        const assigneeCell = row.querySelector('td.assignee');
+                        let assignee = 'Unassigned';
+                        
+                        if (assigneeCell.querySelector('a')) {
+                            assignee = assigneeCell.querySelector('a').textContent.trim();
+                        }
+
+                        if (!issuesByAssignee[assignee]) {
+                            issuesByAssignee[assignee] = [];
+                        }
+
+                        issuesByAssignee[assignee].push({
+                            key,
+                            summary,
+                            url: `${baseUrl}/browse/${key}`
+                        });
+                    });
+                    
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                }
+
+                document.body.removeChild(progressDiv);
+
+                const sortedAssignees = Object.keys(issuesByAssignee).sort();
+
+                const htmlContent = new Array();
+                htmlContent.push('<div style="font-weight: normal; white-space: pre-wrap;">');
+
+                sortedAssignees.forEach(assignee => {
+                    htmlContent.push(`<p><strong>${assignee}:</strong></p>`);
+                    
+                    issuesByAssignee[assignee].sort((a, b) => a.key.localeCompare(b.key));
+                    
+                    const issuesList = issuesByAssignee[assignee].map(issue => 
+                        `<div style="margin-left: 20px; margin-bottom: 5px;">` +
+                        `<a href="${issue.url}" style="font-weight: normal;">${issue.key}</a> - ${issue.summary}` +
+                        `</div>`
+                    ).join('');
+                    
+                    htmlContent.push(issuesList);
+                    htmlContent.push('<div style="margin-bottom: 15px;"></div>');
+                });
+
+                htmlContent.push('</div>');
+
+                const finalHtml = htmlContent.join('\n');
+
+                await navigator.clipboard.write([
+                    new ClipboardItem({
+                        'text/html': new Blob([finalHtml], {type: 'text/html'}),
+                        'text/plain': new Blob([finalHtml.replace(/<[^>]+>/g, '')], {type: 'text/plain'})
+                    })
+                ]);
+
+                const originalBgColor = collectButton.style.backgroundColor;
+                const originalBorderColor = collectButton.style.borderColor;
+                collectButton.textContent = 'Copied!';
+                setTimeout(() => {
+                    collectButton.textContent = 'Collect All Issues';
+                }, 2000);
+
+                console.log('Collected All Issues:');
+                console.log(finalHtml.replace(/<[^>]+>/g, ''));
+
+            } catch (error) {
+                console.error('Error collecting issues:', error);
+                document.body.removeChild(progressDiv);
+                collectButton.textContent = 'Error!';
+                setTimeout(() => {
+                    collectButton.textContent = 'Collect All Issues';
+                }, 2000);
+            }
+        }
+
+        collectButton.addEventListener('click', getAllIssues);
+    });
+})();
