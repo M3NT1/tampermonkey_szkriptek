@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JIRA Issue Collector
 // @namespace    http://tampermonkey.net/
-// @version      2.6
+// @version      2.7
 // @description  Collect JIRA issues data with grouping by assignee from all pages - With required columns check
 // @author       M3NT1
 // @match        https://jira.ulyssys.hu/issues/*
@@ -88,7 +88,7 @@
                         },
                         credentials: 'include'
                     });
-
+                    
                     if (!response.ok) {
                         throw new Error(`HTTP error! status: ${response.status}`);
                     }
@@ -107,9 +107,9 @@
                 'summary': false,
                 'assignee': false
             };
-
+            
             const missingColumns = [];
-
+            
             headers.forEach(header => {
                 const columnId = header.getAttribute('data-id') || '';
                 Object.keys(requiredColumns).forEach(required => {
@@ -118,11 +118,11 @@
                     }
                 });
             });
-
+            
             if (!requiredColumns.issuekey) missingColumns.push('Key');
             if (!requiredColumns.summary) missingColumns.push('Summary');
             if (!requiredColumns.assignee) missingColumns.push('Assignee');
-
+            
             return missingColumns;
         }
 
@@ -131,7 +131,7 @@
                 // Először ellenőrizzük a kötelező oszlopokat
                 const missingColumns = checkRequiredColumns();
                 if (missingColumns.length > 0) {
-                    const errorMessage = 'Hiányzó kötelező oszlop(ok):\n' +
+                    const errorMessage = 'Hiányzó kötelező oszlop(ok):\n' + 
                                       missingColumns.join(', ') + '\n\n' +
                                       'Kérlek add hozzá ezeket az oszlopokat a nézethez a "Columns" gombra kattintva!';
                     showError(errorMessage, false);
@@ -163,7 +163,7 @@
                     progressDiv.textContent = `Collecting issues ${startAt + 1} to ${Math.min(startAt + batchSize, totalResults)} of ${totalResults}...`;
 
                     const url = `${baseUrl}/issues/?jql=${encodeURIComponent(jqlInput)}&startAt=${startAt}&maxResults=${batchSize}`;
-
+                    
                     const response = await fetchWithRetry(url);
                     const text = await response.text();
                     const parser = new DOMParser();
@@ -178,15 +178,16 @@
                     rows.forEach(row => {
                         const keyElement = row.querySelector('td.issuekey a');
                         if (!keyElement) return;
-
+                        
                         const key = keyElement.textContent.trim();
-
+                        const keyUrl = keyElement.href;
+                        
                         if (processedIssueKeys.has(key)) {
                             console.log(`Skipping duplicate issue: ${key}`);
                             return;
                         }
                         processedIssueKeys.add(key);
-
+                        
                         const summaryCell = row.querySelector('td.summary');
                         const assigneeCell = row.querySelector('td.assignee');
 
@@ -197,7 +198,7 @@
 
                         const summaryLinks = summaryCell.querySelectorAll('a.issue-link');
                         let summary = '';
-
+                        
                         if (summaryLinks.length > 0) {
                             summary = summaryLinks[summaryLinks.length - 1].textContent.trim();
                         } else {
@@ -221,7 +222,7 @@
                         issuesByAssignee[assignee].push({
                             key,
                             summary,
-                            url: `${baseUrl}/browse/${key}`
+                            url: keyUrl
                         });
                     });
 
@@ -236,21 +237,24 @@
 
                 const sortedAssignees = Object.keys(issuesByAssignee).sort();
                 const htmlContent = new Array();
-                htmlContent.push('<div style="font-weight: normal; white-space: pre-wrap;">');
+                htmlContent.push('<div style="font-family: -apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Oxygen,Ubuntu,\'Fira Sans\',\'Droid Sans\',\'Helvetica Neue\',sans-serif; font-size: 14px;">');
 
                 sortedAssignees.forEach(assignee => {
-                    htmlContent.push(`<p><strong>${assignee}:</strong></p>`);
+                    htmlContent.push(`<p style="margin: 20px 0 10px 0; font-size: 16px;"><strong style="font-weight: 600;">${assignee}:</strong></p>`);
+                    
                     issuesByAssignee[assignee].sort((a, b) => a.key.localeCompare(b.key));
-                    htmlContent.push('<ul style="margin-left: 20px; margin-top: 5px; margin-bottom: 10px;">');
+                    
+                    htmlContent.push('<ul style="list-style-type: none; margin: 0; padding: 0;">');
+                    
                     issuesByAssignee[assignee].forEach(issue => {
                         htmlContent.push(
-                            `<li style="margin-bottom: 5px;">` +
-                            `<a href="${issue.url}" style="font-weight: normal;">${issue.key}</a> - ${issue.summary}` +
+                            `<li style="margin: 5px 0; line-height: 1.5;">` +
+                            `<a href="${issue.url}" style="color: #0052CC; text-decoration: none; font-weight: 500;">${issue.key}</a> - ${issue.summary}` +
                             `</li>`
                         );
                     });
+                    
                     htmlContent.push('</ul>');
-                    htmlContent.push('<div style="margin-bottom: 15px;"></div>');
                 });
 
                 htmlContent.push('</div>');
