@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         JIRA Issue Collector
 // @namespace    http://tampermonkey.net/
-// @version      2.1
-// @description  Collect JIRA issues data with grouping by assignee from all pages
+// @version      2.5
+// @description  Collect JIRA issues data with grouping by assignee from all pages - With duplicate prevention
 // @author       M3NT1
 // @match        https://jira.ulyssys.hu/issues/*
 // @grant        none
@@ -36,59 +36,145 @@
 
         scriptRunnerBtn.parentNode.insertBefore(collectButton, scriptRunnerBtn.nextSibling);
 
+        function showError(message, isTemporary = true) {
+            const errorDiv = document.createElement('div');
+            errorDiv.style.position = 'fixed';
+            errorDiv.style.top = '50%';
+            errorDiv.style.left = '50%';
+            errorDiv.style.transform = 'translate(-50%, -50%)';
+            errorDiv.style.padding = '20px';
+            errorDiv.style.background = '#ffebee';
+            errorDiv.style.border = '1px solid #ef5350';
+            errorDiv.style.borderRadius = '5px';
+            errorDiv.style.zIndex = '10000';
+            errorDiv.style.color = '#c62828';
+            errorDiv.style.fontWeight = 'bold';
+            errorDiv.textContent = message;
+
+            if (isTemporary) {
+                setTimeout(() => {
+                    if (document.body.contains(errorDiv)) {
+                        document.body.removeChild(errorDiv);
+                    }
+                }, 5000);
+            } else {
+                const closeButton = document.createElement('button');
+                closeButton.textContent = '×';
+                closeButton.style.position = 'absolute';
+                closeButton.style.right = '10px';
+                closeButton.style.top = '10px';
+                closeButton.style.border = 'none';
+                closeButton.style.background = 'none';
+                closeButton.style.fontSize = '20px';
+                closeButton.style.cursor = 'pointer';
+                closeButton.style.color = '#c62828';
+                closeButton.onclick = () => document.body.removeChild(errorDiv);
+                errorDiv.appendChild(closeButton);
+            }
+
+            document.body.appendChild(errorDiv);
+            return errorDiv;
+        }
+
+        async function fetchWithRetry(url, retries = 3, delay = 1000) {
+            for (let i = 0; i < retries; i++) {
+                try {
+                    const response = await fetch(url, {
+                        headers: {
+                            'Cache-Control': 'no-cache',
+                            'Pragma': 'no-cache'
+                        },
+                        credentials: 'include'
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response;
+                } catch (error) {
+                    if (i === retries - 1) throw error;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+        }
+
         async function getAllIssues() {
             const baseUrl = window.location.origin;
             const issuesByAssignee = {};
-
-            const jqlInput = document.querySelector('#jql').value;
-            const startIndex = 0;
-
-            const totalResults = parseInt(document.querySelector('.results-count-total').textContent);
-            const batchSize = 50;
-
-            const progressDiv = document.createElement('div');
-            progressDiv.style.position = 'fixed';
-            progressDiv.style.top = '50%';
-            progressDiv.style.left = '50%';
-            progressDiv.style.transform = 'translate(-50%, -50%)';
-            progressDiv.style.padding = '20px';
-            progressDiv.style.background = 'white';
-            progressDiv.style.border = '1px solid #ccc';
-            progressDiv.style.borderRadius = '5px';
-            progressDiv.style.zIndex = '10000';
-            document.body.appendChild(progressDiv);
+            const processedIssueKeys = new Set();
+            let progressDiv = null;
 
             try {
+                const jqlInput = document.querySelector('#jql').value;
+                const totalResults = parseInt(document.querySelector('.results-count-total').textContent);
+                const batchSize = 50;
+
+                progressDiv = document.createElement('div');
+                progressDiv.style.position = 'fixed';
+                progressDiv.style.top = '50%';
+                progressDiv.style.left = '50%';
+                progressDiv.style.transform = 'translate(-50%, -50%)';
+                progressDiv.style.padding = '20px';
+                progressDiv.style.background = 'white';
+                progressDiv.style.border = '1px solid #ccc';
+                progressDiv.style.borderRadius = '5px';
+                progressDiv.style.zIndex = '10000';
+                document.body.appendChild(progressDiv);
+
                 for(let startAt = 0; startAt < totalResults; startAt += batchSize) {
                     progressDiv.textContent = `Collecting issues ${startAt + 1} to ${Math.min(startAt + batchSize, totalResults)} of ${totalResults}...`;
 
-                    const url = `${baseUrl}/issues/?jql=${encodeURIComponent(jqlInput)}&startIndex=${startAt}`;
+                    const url = `${baseUrl}/issues/?jql=${encodeURIComponent(jqlInput)}&startAt=${startAt}&maxResults=${batchSize}`;
 
-                    const response = await fetch(url);
+                    const response = await fetchWithRetry(url);
                     const text = await response.text();
                     const parser = new DOMParser();
                     const doc = parser.parseFromString(text, 'text/html');
 
                     const rows = doc.querySelectorAll('tr.issuerow');
+                    if (rows.length === 0) {
+                        console.warn(`No rows found for startAt=${startAt}`);
+                        continue;
+                    }
 
                     rows.forEach(row => {
-                        const key = row.querySelector('td.issuekey a').textContent.trim();
+                        const keyElement = row.querySelector('td.issuekey a');
+                        if (!keyElement) return;
+
+                        const key = keyElement.textContent.trim();
+
+                        // Skip if we've already processed this issue
+                        if (processedIssueKeys.has(key)) {
+                            console.log(`Skipping duplicate issue: ${key}`);
+                            return;
+                        }
+                        processedIssueKeys.add(key);
+
                         const summaryCell = row.querySelector('td.summary');
+                        const assigneeCell = row.querySelector('td.assignee');
+
+                        if (!summaryCell || !assigneeCell) {
+                            console.warn('Missing required elements in row:', row);
+                            return;
+                        }
 
                         const summaryLinks = summaryCell.querySelectorAll('a.issue-link');
                         let summary = '';
 
-                        if (summaryLinks.length > 1) {
+                        if (summaryLinks.length > 0) {
                             summary = summaryLinks[summaryLinks.length - 1].textContent.trim();
                         } else {
-                            summary = summaryLinks[0].textContent.trim();
+                            summary = summaryCell.textContent.trim();
                         }
 
-                        const assigneeCell = row.querySelector('td.assignee');
                         let assignee = 'Unassigned';
-
-                        if (assigneeCell.querySelector('a')) {
-                            assignee = assigneeCell.querySelector('a').textContent.trim();
+                        const assigneeLink = assigneeCell.querySelector('a');
+                        if (assigneeLink) {
+                            assignee = assigneeLink.textContent.trim();
+                            const inactiveText = assigneeCell.textContent.trim();
+                            if (inactiveText.includes('[X]') || inactiveText.includes('(Inactive)')) {
+                                assignee += ' [X] (Inactive)';
+                            }
                         }
 
                         if (!issuesByAssignee[assignee]) {
@@ -102,25 +188,23 @@
                         });
                     });
 
-                    await new Promise(resolve => setTimeout(resolve, 500));
+                    await new Promise(resolve => setTimeout(resolve, 1000));
                 }
 
-                document.body.removeChild(progressDiv);
+                if (progressDiv) {
+                    document.body.removeChild(progressDiv);
+                }
+
+                console.log(`Total unique issues collected: ${processedIssueKeys.size}`);
 
                 const sortedAssignees = Object.keys(issuesByAssignee).sort();
-
                 const htmlContent = new Array();
                 htmlContent.push('<div style="font-weight: normal; white-space: pre-wrap;">');
 
                 sortedAssignees.forEach(assignee => {
                     htmlContent.push(`<p><strong>${assignee}:</strong></p>`);
-
                     issuesByAssignee[assignee].sort((a, b) => a.key.localeCompare(b.key));
-
-                    // Bullet point lista kezdete
                     htmlContent.push('<ul style="margin-left: 20px; margin-top: 5px; margin-bottom: 10px;">');
-
-                    // Issue-k listázása bullet pointokkal
                     issuesByAssignee[assignee].forEach(issue => {
                         htmlContent.push(
                             `<li style="margin-bottom: 5px;">` +
@@ -128,24 +212,32 @@
                             `</li>`
                         );
                     });
-
-                    // Lista lezárása
                     htmlContent.push('</ul>');
                     htmlContent.push('<div style="margin-bottom: 15px;"></div>');
                 });
 
                 htmlContent.push('</div>');
-
                 const finalHtml = htmlContent.join('\n');
 
-                await navigator.clipboard.write([
-                    new ClipboardItem({
-                        'text/html': new Blob([finalHtml], {type: 'text/html'}),
-                        'text/plain': new Blob([finalHtml.replace(/<[^>]+>/g, '')], {type: 'text/plain'})
-                    })
-                ]);
+                try {
+                    await navigator.clipboard.write([
+                        new ClipboardItem({
+                            'text/html': new Blob([finalHtml], {type: 'text/html'}),
+                            'text/plain': new Blob([finalHtml.replace(/<[^>]+>/g, '')], {type: 'text/plain'})
+                        })
+                    ]);
+                    collectButton.textContent = 'Copied!';
+                } catch (clipboardError) {
+                    console.error('Clipboard error:', clipboardError);
+                    const textarea = document.createElement('textarea');
+                    textarea.value = finalHtml.replace(/<[^>]+>/g, '');
+                    document.body.appendChild(textarea);
+                    textarea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(textarea);
+                    collectButton.textContent = 'Copied (plain text)!';
+                }
 
-                collectButton.textContent = 'Copied!';
                 setTimeout(() => {
                     collectButton.textContent = 'Collect All Issues';
                 }, 2000);
@@ -155,11 +247,14 @@
 
             } catch (error) {
                 console.error('Error collecting issues:', error);
-                document.body.removeChild(progressDiv);
+                if (progressDiv && document.body.contains(progressDiv)) {
+                    document.body.removeChild(progressDiv);
+                }
                 collectButton.textContent = 'Error!';
                 setTimeout(() => {
                     collectButton.textContent = 'Collect All Issues';
                 }, 2000);
+                showError(`Error collecting issues: ${error.message}`, false);
             }
         }
 
