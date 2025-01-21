@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         JIRA Issue Collector
 // @namespace    http://tampermonkey.net/
-// @version      2.5
-// @description  Collect JIRA issues data with grouping by assignee from all pages - With duplicate prevention
+// @version      2.6
+// @description  Collect JIRA issues data with grouping by assignee from all pages - With required columns check
 // @author       M3NT1
 // @match        https://jira.ulyssys.hu/issues/*
 // @grant        none
@@ -49,6 +49,8 @@
             errorDiv.style.zIndex = '10000';
             errorDiv.style.color = '#c62828';
             errorDiv.style.fontWeight = 'bold';
+            errorDiv.style.maxWidth = '80%';
+            errorDiv.style.whiteSpace = 'pre-wrap';
             errorDiv.textContent = message;
 
             if (isTemporary) {
@@ -98,13 +100,49 @@
             }
         }
 
-        async function getAllIssues() {
-            const baseUrl = window.location.origin;
-            const issuesByAssignee = {};
-            const processedIssueKeys = new Set();
-            let progressDiv = null;
+        function checkRequiredColumns() {
+            const headers = Array.from(document.querySelectorAll('th'));
+            const requiredColumns = {
+                'issuekey': false,
+                'summary': false,
+                'assignee': false
+            };
 
+            const missingColumns = [];
+
+            headers.forEach(header => {
+                const columnId = header.getAttribute('data-id') || '';
+                Object.keys(requiredColumns).forEach(required => {
+                    if (columnId.includes(required)) {
+                        requiredColumns[required] = true;
+                    }
+                });
+            });
+
+            if (!requiredColumns.issuekey) missingColumns.push('Key');
+            if (!requiredColumns.summary) missingColumns.push('Summary');
+            if (!requiredColumns.assignee) missingColumns.push('Assignee');
+
+            return missingColumns;
+        }
+
+        async function getAllIssues() {
             try {
+                // Először ellenőrizzük a kötelező oszlopokat
+                const missingColumns = checkRequiredColumns();
+                if (missingColumns.length > 0) {
+                    const errorMessage = 'Hiányzó kötelező oszlop(ok):\n' +
+                                      missingColumns.join(', ') + '\n\n' +
+                                      'Kérlek add hozzá ezeket az oszlopokat a nézethez a "Columns" gombra kattintva!';
+                    showError(errorMessage, false);
+                    return;
+                }
+
+                const baseUrl = window.location.origin;
+                const issuesByAssignee = {};
+                const processedIssueKeys = new Set();
+                let progressDiv = null;
+
                 const jqlInput = document.querySelector('#jql').value;
                 const totalResults = parseInt(document.querySelector('.results-count-total').textContent);
                 const batchSize = 50;
@@ -143,7 +181,6 @@
 
                         const key = keyElement.textContent.trim();
 
-                        // Skip if we've already processed this issue
                         if (processedIssueKeys.has(key)) {
                             console.log(`Skipping duplicate issue: ${key}`);
                             return;
