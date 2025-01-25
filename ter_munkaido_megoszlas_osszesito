@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         TER Munkaidő Összesítő
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.1
 // @description  Munkaidő összesítő szkript a TER rendszerhez
-// @author       Your name
+// @author       M3NT1
 // @match        https://ter.ulyssys.hu/ter/wt/wtown*
 // @grant        none
 // ==/UserScript==
@@ -116,7 +116,7 @@
         }
         .activity-cell {
             padding: 5px;
-            padding-left: 20px;
+            padding-left: 40px;
         }
         .hours-cell {
             padding: 5px;
@@ -265,24 +265,12 @@
                     hours: 0,
                     percentage: 0,
                     areas: {},
-                    activities: {}, // Közvetlen tevékenységek a projekthez
                     hasAreas: false
                 };
             }
 
-            // Ha NAK support vagy nincs terület
-            if (projectName === 'NAK support' || !area) {
-                if (activity) {
-                    if (!projectSummary[projectName].activities[activity]) {
-                        projectSummary[projectName].activities[activity] = {
-                            hours: 0,
-                            percentage: 0
-                        };
-                    }
-                    projectSummary[projectName].activities[activity].hours += hours;
-                }
-            } else {
-                // Területek kezelése
+            // Ha van terület, mindig területekre bontjuk
+            if (area) {
                 projectSummary[projectName].hasAreas = true;
                 if (!projectSummary[projectName].areas[area]) {
                     projectSummary[projectName].areas[area] = {
@@ -301,6 +289,20 @@
                     projectSummary[projectName].areas[area].activities[activity].hours += hours;
                 }
                 projectSummary[projectName].areas[area].hours += hours;
+            } else {
+                // Ha nincs terület, akkor közvetlen tevékenységként kezeljük
+                if (!projectSummary[projectName].activities) {
+                    projectSummary[projectName].activities = {};
+                }
+                if (activity) {
+                    if (!projectSummary[projectName].activities[activity]) {
+                        projectSummary[projectName].activities[activity] = {
+                            hours: 0,
+                            percentage: 0
+                        };
+                    }
+                    projectSummary[projectName].activities[activity].hours += hours;
+                }
             }
 
             projectSummary[projectName].hours += hours;
@@ -314,10 +316,12 @@
             project.percentage = (project.hours / totalHours) * 100;
 
             // Közvetlen tevékenységek százalékai
-            Object.keys(project.activities).forEach(activity => {
-                project.activities[activity].percentage =
-                    (project.activities[activity].hours / project.hours) * 100;
-            });
+            if (project.activities) {
+                Object.keys(project.activities).forEach(activity => {
+                    project.activities[activity].percentage =
+                        (project.activities[activity].hours / project.hours) * 100;
+                });
+            }
 
             // Területek és azok tevékenységeinek százalékai
             if (project.hasAreas) {
@@ -400,7 +404,7 @@
             }
 
             // Közvetlen tevékenységek megjelenítése
-            if (Object.keys(project.activities).length > 0) {
+            if (project.activities && Object.keys(project.activities).length > 0) {
                 Object.keys(project.activities).sort().forEach(activity => {
                     const activityData = project.activities[activity];
                     resultHTML += `
