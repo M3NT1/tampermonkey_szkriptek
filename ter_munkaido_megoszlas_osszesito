@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TER Munkaidő Összesítő
 // @namespace    http://tampermonkey.net/
-// @version      1.1
+// @version      1.3
 // @description  Munkaidő összesítő szkript a TER rendszerhez
 // @author       M3NT1
 // @match        https://ter.ulyssys.hu/ter/wt/wtown*
@@ -19,6 +19,10 @@
     let initialY;
     let xOffset = 0;
     let yOffset = 0;
+
+    // Projekt limitek kezelése
+    let projectLimits = JSON.parse(localStorage.getItem('projectLimits') || '{}');
+    let knownProjects = [];
 
     // Stílusok hozzáadása
     console.log('Stílusok hozzáadása...');
@@ -43,6 +47,7 @@
             box-shadow: 0 2px 5px rgba(0,0,0,0.2);
             z-index: 10000;
             display: none;
+            min-width: 250px;
         }
         .date-selector input {
             margin: 5px;
@@ -104,6 +109,11 @@
             font-weight: bold;
             background-color: #fff;
         }
+        .subproject-row {
+            border-bottom: 1px solid #eee;
+            background-color: #f8f8f8;
+            font-weight: bold;
+        }
         .area-row {
             border-bottom: 1px solid #eee;
             background-color: #f5f5f5;
@@ -125,6 +135,31 @@
         .percent-cell {
             padding: 5px;
             text-align: right;
+        }
+        .limit-exceeded {
+            background-color: #ffebee;
+        }
+        .project-limits {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid #eee;
+        }
+        .project-limit-row {
+            display: flex;
+            align-items: center;
+            margin: 5px 0;
+            padding: 5px;
+        }
+        .project-limit-row input[type="number"] {
+            width: 60px;
+            margin-left: 10px;
+            padding: 2px 5px;
+        }
+        .project-limit-row label {
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
     `;
     document.head.appendChild(style);
@@ -151,6 +186,81 @@
     document.body.appendChild(floatingButton);
     document.body.appendChild(dateSelector);
 
+    // Limit változtatás kezelése
+    function handleLimitChange(project, value) {
+        const numValue = value ? parseFloat(value) : null;
+        if (numValue !== null) {
+            projectLimits[project] = numValue;
+        } else {
+            delete projectLimits[project];
+        }
+        localStorage.setItem('projectLimits', JSON.stringify(projectLimits));
+        console.log('Projekt limitek mentve:', projectLimits);
+
+        // Limit ellenőrzése és színezés frissítése
+        Object.keys(projectSummary).forEach(projectName => {
+            const project = projectSummary[projectName];
+            if (project.isNakMainProject) {
+                project.limitExceeded = projectLimits['NAK'] && project.percentage > projectLimits['NAK'];
+                Object.keys(project.projects).forEach(nakProjectName => {
+                    const nakProject = project.projects[nakProjectName];
+                    nakProject.limitExceeded = projectLimits[nakProjectName] && nakProject.percentage > projectLimits[nakProjectName];
+                });
+            } else {
+                project.limitExceeded = projectLimits[projectName] && project.percentage > projectLimits[projectName];
+            }
+        });
+
+        // Eredmények újra megjelenítése
+        displayResults();
+    }
+
+    // Projekt limitek frissítése
+    function updateProjectLimits(projects) {
+        const limitSection = document.createElement('div');
+        limitSection.className = 'project-limits';
+        limitSection.innerHTML = `
+            <h4 style="margin: 0 0 10px 0;">Projekt limitek (%)</h4>
+            <div id="projectLimitsList"></div>
+        `;
+
+        const projectLimitsList = limitSection.querySelector('#projectLimitsList');
+
+        // Főprojektek limitjei
+        Object.keys(projects).sort().forEach(project => {
+            if (project === 'NAK') {
+                // NAK főprojekt limit
+                addLimitRow(projectLimitsList, 'NAK', 'NAK (összesen)');
+
+                // NAK alprojektek limitjei
+                Object.keys(projects[project].projects).sort().forEach(nakProject => {
+                    addLimitRow(projectLimitsList, nakProject, nakProject);
+                });
+            } else {
+                addLimitRow(projectLimitsList, project, project);
+            }
+        });
+
+        return limitSection;
+    }
+
+    function addLimitRow(container, projectKey, displayName) {
+        const limitRow = document.createElement('div');
+        limitRow.className = 'project-limit-row';
+        limitRow.innerHTML = `
+            <label for="limit-${projectKey}">${displayName}:</label>
+            <input type="number" id="limit-${projectKey}" min="0" max="100" step="1"
+                   value="${projectLimits[projectKey] || ''}"
+                   placeholder="nincs limit">
+        `;
+        container.appendChild(limitRow);
+
+        // Limit változás azonnali kezelése
+        const input = limitRow.querySelector('input');
+        input.addEventListener('input', (e) => {
+            handleLimitChange(projectKey, e.target.value);
+        });
+    }
     // Gomb mozgatás kezelése
     function dragStart(e) {
         console.log('Gomb mozgatás kezdődik...');
@@ -230,109 +340,150 @@
         const projectRows = document.querySelectorAll('#form\\:workingTimes_data tr');
         console.log(`Talált projekt sorok száma: ${projectRows.length}`);
 
+        // Ideiglenes tárolók a NAK projekteknek
+        let nakProjects = {
+            hours: 0,
+            percentage: 0,
+            projects: {},
+            isNakMainProject: true
+        };
+
         projectRows.forEach(row => {
             const projectInput = row.querySelector('input[id*="j_idt1384_input"]');
-            if (!projectInput) {
-                console.log('Projekt input nem található a sorban');
-                return;
-            }
+            if (!projectInput) return;
 
             const projectName = projectInput.value;
-
             const areaInput = row.querySelector('input[id*="areaComp_input"]');
             const area = areaInput && !areaInput.disabled && areaInput.value ? areaInput.value : '';
-
             const activityInput = row.querySelector('input[id*="j_idt1387_input"]');
             const activity = activityInput ? activityInput.value : '';
-
             const timeInput = row.querySelector('input[id*="j_idt1389"]');
-            if (!timeInput) {
-                console.log('Idő input nem található a sorban');
-                return;
-            }
+            if (!timeInput) return;
 
             const timeStr = timeInput.value;
             const hours = convertTimeToHours(timeStr);
+            if (!projectName || !hours) return;
 
-            if (!projectName || !hours) {
-                console.log('Hiányzó projekt név vagy óra:', { projectName, hours });
-                return;
-            }
-
-            // Projekt struktúra létrehozása
-            if (!projectSummary[projectName]) {
-                projectSummary[projectName] = {
-                    hours: 0,
-                    percentage: 0,
-                    areas: {},
-                    hasAreas: false
-                };
-            }
-
-            // Ha van terület, mindig területekre bontjuk
-            if (area) {
-                projectSummary[projectName].hasAreas = true;
-                if (!projectSummary[projectName].areas[area]) {
-                    projectSummary[projectName].areas[area] = {
+            // NAK projektek kezelése
+            if (projectName.startsWith('NAK')) {
+                if (!nakProjects.projects[projectName]) {
+                    nakProjects.projects[projectName] = {
                         hours: 0,
                         percentage: 0,
-                        activities: {}
+                        areas: {},
+                        activities: {},
+                        hasAreas: false
                     };
                 }
-                if (activity) {
-                    if (!projectSummary[projectName].areas[area].activities[activity]) {
-                        projectSummary[projectName].areas[area].activities[activity] = {
+
+                const projectData = nakProjects.projects[projectName];
+
+                // Terület és tevékenység kezelése
+                if (area) {
+                    projectData.hasAreas = true;
+                    if (!projectData.areas[area]) {
+                        projectData.areas[area] = {
+                            hours: 0,
+                            percentage: 0,
+                            activities: {}
+                        };
+                    }
+                    if (activity) {
+                        if (!projectData.areas[area].activities[activity]) {
+                            projectData.areas[area].activities[activity] = {
+                                hours: 0,
+                                percentage: 0
+                            };
+                        }
+                        projectData.areas[area].activities[activity].hours += hours;
+                    }
+                    projectData.areas[area].hours += hours;
+                } else if (activity) {
+                    if (!projectData.activities[activity]) {
+                        projectData.activities[activity] = {
                             hours: 0,
                             percentage: 0
                         };
                     }
-                    projectSummary[projectName].areas[area].activities[activity].hours += hours;
+                    projectData.activities[activity].hours += hours;
                 }
-                projectSummary[projectName].areas[area].hours += hours;
+
+                projectData.hours += hours;
+                nakProjects.hours += hours;
             } else {
-                // Ha nincs terület, akkor közvetlen tevékenységként kezeljük
-                if (!projectSummary[projectName].activities) {
-                    projectSummary[projectName].activities = {};
+                // Nem NAK projektek kezelése (pl. EFOP)
+                if (!projectSummary[projectName]) {
+                    projectSummary[projectName] = {
+                        hours: 0,
+                        percentage: 0,
+                        activities: {},
+                        hasAreas: false
+                    };
                 }
+
+                const projectData = projectSummary[projectName];
+
                 if (activity) {
-                    if (!projectSummary[projectName].activities[activity]) {
-                        projectSummary[projectName].activities[activity] = {
+                    if (!projectData.activities[activity]) {
+                        projectData.activities[activity] = {
                             hours: 0,
                             percentage: 0
                         };
                     }
-                    projectSummary[projectName].activities[activity].hours += hours;
+                    projectData.activities[activity].hours += hours;
                 }
+
+                projectData.hours += hours;
             }
 
-            projectSummary[projectName].hours += hours;
             totalHours += hours;
-            console.log(`Projekt óra hozzáadva: ${projectName} - ${hours} óra (Összesen: ${projectSummary[projectName].hours})`);
         });
 
-        // Százalékok számítása
+        // NAK főprojekt hozzáadása a projektSummary-hoz
+        if (nakProjects.hours > 0) {
+            projectSummary['NAK'] = nakProjects;
+        }
+
+        // Százalékok számítása és limit ellenőrzés
         Object.keys(projectSummary).forEach(projectName => {
             const project = projectSummary[projectName];
             project.percentage = (project.hours / totalHours) * 100;
 
-            // Közvetlen tevékenységek százalékai
-            if (project.activities) {
+            if (project.isNakMainProject) {
+                // NAK főprojekt limit ellenőrzése
+                project.limitExceeded = projectLimits['NAK'] && project.percentage > projectLimits['NAK'];
+
+                // NAK alprojektek százalékai és limit ellenőrzése
+                Object.keys(project.projects).forEach(nakProjectName => {
+                    const nakProject = project.projects[nakProjectName];
+                    nakProject.percentage = (nakProject.hours / project.hours) * 100;
+                    nakProject.limitExceeded = projectLimits[nakProjectName] && nakProject.percentage > projectLimits[nakProjectName];
+
+                    // Területek és tevékenységek százalékai
+                    if (nakProject.hasAreas) {
+                        Object.keys(nakProject.areas).forEach(area => {
+                            const areaData = nakProject.areas[area];
+                            areaData.percentage = (areaData.hours / nakProject.hours) * 100;
+
+                            Object.keys(areaData.activities).forEach(activity => {
+                                areaData.activities[activity].percentage =
+                                    (areaData.activities[activity].hours / areaData.hours) * 100;
+                            });
+                        });
+                    }
+
+                    // Közvetlen tevékenységek százalékai
+                    Object.keys(nakProject.activities).forEach(activity => {
+                        nakProject.activities[activity].percentage =
+                            (nakProject.activities[activity].hours / nakProject.hours) * 100;
+                    });
+                });
+            } else {
+                // Normál projektek limit ellenőrzése és tevékenységek százalékai
+                project.limitExceeded = projectLimits[projectName] && project.percentage > projectLimits[projectName];
                 Object.keys(project.activities).forEach(activity => {
                     project.activities[activity].percentage =
                         (project.activities[activity].hours / project.hours) * 100;
-                });
-            }
-
-            // Területek és azok tevékenységeinek százalékai
-            if (project.hasAreas) {
-                Object.keys(project.areas).forEach(area => {
-                    const areaData = project.areas[area];
-                    areaData.percentage = (areaData.hours / project.hours) * 100;
-
-                    Object.keys(areaData.activities).forEach(activity => {
-                        areaData.activities[activity].percentage =
-                            (areaData.activities[activity].hours / areaData.hours) * 100;
-                    });
                 });
             }
         });
@@ -368,48 +519,85 @@
 
         Object.keys(projectSummary).sort().forEach(projectName => {
             const project = projectSummary[projectName];
-            // Projekt sor
-            resultHTML += `
-                <tr class="project-row">
-                    <td style="padding: 5px;">${projectName}</td>
-                    <td class="hours-cell">${project.hours.toFixed(2)}</td>
-                    <td class="percent-cell">${project.percentage.toFixed(1)}%</td>
-                </tr>
-            `;
+            const limitClass = project.limitExceeded ? 'limit-exceeded' : '';
 
-            if (project.hasAreas) {
-                // Területek és azok tevékenységei
-                Object.keys(project.areas).sort().forEach(area => {
-                    const areaData = project.areas[area];
+            if (project.isNakMainProject) {
+                // NAK főprojekt sor
+                resultHTML += `
+                    <tr class="project-row ${limitClass}">
+                        <td style="padding: 5px;">NAK${projectLimits['NAK'] ? ` (Limit: ${projectLimits['NAK']}%)` : ''}</td>
+                        <td class="hours-cell">${project.hours.toFixed(2)}</td>
+                        <td class="percent-cell">${project.percentage.toFixed(1)}%</td>
+                    </tr>
+                `;
+
+                // NAK alprojektek
+                Object.keys(project.projects).sort().forEach(nakProjectName => {
+                    const nakProject = project.projects[nakProjectName];
+                    const nakLimitClass = nakProject.limitExceeded ? 'limit-exceeded' : '';
+
                     resultHTML += `
-                        <tr class="area-row">
-                            <td style="padding: 5px; padding-left: 20px;">└ ${area}</td>
-                            <td class="hours-cell">${areaData.hours.toFixed(2)}</td>
-                            <td class="percent-cell">${areaData.percentage.toFixed(1)}%</td>
+                        <tr class="subproject-row ${nakLimitClass}">
+                            <td style="padding: 5px; padding-left: 20px;">└ ${nakProjectName}${projectLimits[nakProjectName] ? ` (Limit: ${projectLimits[nakProjectName]}%)` : ''}</td>
+                            <td class="hours-cell">${nakProject.hours.toFixed(2)}</td>
+                            <td class="percent-cell">${nakProject.percentage.toFixed(1)}%</td>
                         </tr>
                     `;
 
-                    // Terület tevékenységei
-                    Object.keys(areaData.activities).sort().forEach(activity => {
-                        const activityData = areaData.activities[activity];
+                    if (nakProject.hasAreas) {
+                        // Területek
+                        Object.keys(nakProject.areas).sort().forEach(area => {
+                            const areaData = nakProject.areas[area];
+                            resultHTML += `
+                                <tr class="area-row ${nakLimitClass}">
+                                    <td style="padding: 5px; padding-left: 40px;">└ ${area}</td>
+                                    <td class="hours-cell">${areaData.hours.toFixed(2)}</td>
+                                    <td class="percent-cell">${areaData.percentage.toFixed(1)}%</td>
+                                </tr>
+                            `;
+
+                            // Terület tevékenységei
+                            Object.keys(areaData.activities).sort().forEach(activity => {
+                                const activityData = areaData.activities[activity];
+                                resultHTML += `
+                                    <tr class="activity-row ${nakLimitClass}">
+                                        <td style="padding: 5px; padding-left: 60px;">└ ${activity}</td>
+                                        <td class="hours-cell">${activityData.hours.toFixed(2)}</td>
+                                        <td class="percent-cell">${activityData.percentage.toFixed(1)}%</td>
+                                    </tr>
+                                `;
+                            });
+                        });
+                    }
+
+                    // Közvetlen tevékenységek
+                    Object.keys(nakProject.activities).sort().forEach(activity => {
+                        const activityData = nakProject.activities[activity];
                         resultHTML += `
-                            <tr class="activity-row">
-                                <td class="activity-cell" style="padding-left: 40px;">└ ${activity}</td>
+                            <tr class="activity-row ${nakLimitClass}">
+                                <td style="padding: 5px; padding-left: 40px;">└ ${activity}</td>
                                 <td class="hours-cell">${activityData.hours.toFixed(2)}</td>
                                 <td class="percent-cell">${activityData.percentage.toFixed(1)}%</td>
                             </tr>
                         `;
                     });
                 });
-            }
+            } else {
+                // Normál projektek (pl. EFOP)
+                resultHTML += `
+                    <tr class="project-row ${limitClass}">
+                        <td style="padding: 5px;">${projectName}${projectLimits[projectName] ? ` (Limit: ${projectLimits[projectName]}%)` : ''}</td>
+                        <td class="hours-cell">${project.hours.toFixed(2)}</td>
+                        <td class="percent-cell">${project.percentage.toFixed(1)}%</td>
+                    </tr>
+                `;
 
-            // Közvetlen tevékenységek megjelenítése
-            if (project.activities && Object.keys(project.activities).length > 0) {
+                // Projekt tevékenységei
                 Object.keys(project.activities).sort().forEach(activity => {
                     const activityData = project.activities[activity];
                     resultHTML += `
-                        <tr class="activity-row">
-                            <td class="activity-cell" style="padding-left: 20px;">└ ${activity}</td>
+                        <tr class="activity-row ${limitClass}">
+                            <td style="padding: 5px; padding-left: 20px;">└ ${activity}</td>
                             <td class="hours-cell">${activityData.hours.toFixed(2)}</td>
                             <td class="percent-cell">${activityData.percentage.toFixed(1)}%</td>
                         </tr>
@@ -437,6 +625,11 @@
         const resultDiv = document.createElement('div');
         resultDiv.innerHTML = resultHTML;
         const summaryWindow = resultDiv.firstElementChild;
+
+        // Projekt limitek hozzáadása
+        const limitSection = updateProjectLimits(projectSummary);
+        summaryWindow.querySelector('.summary-content').appendChild(limitSection);
+
         document.body.appendChild(summaryWindow);
 
         // Összecsukás/kinyitás kezelése
