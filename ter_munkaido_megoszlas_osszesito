@@ -1,0 +1,588 @@
+// ==UserScript==
+// @name         TER Munkaidő Összesítő
+// @namespace    http://tampermonkey.net/
+// @version      1.0
+// @description  Munkaidő összesítő szkript a TER rendszerhez
+// @author       Your name
+// @match        https://ter.ulyssys.hu/ter/wt/wtown*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+    console.log('TER Munkaidő Összesítő szkript betöltése...');
+
+    let isDragging = false;
+    let currentX;
+    let currentY;
+    let initialX;
+    let initialY;
+    let xOffset = 0;
+    let yOffset = 0;
+
+    // Stílusok hozzáadása
+    console.log('Stílusok hozzáadása...');
+    const style = document.createElement('style');
+    style.textContent = `
+        .floating-button {
+            position: fixed;
+            cursor: move;
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 10000;
+            user-select: none;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        .date-selector {
+            position: fixed;
+            background: white;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            z-index: 10000;
+            display: none;
+        }
+        .date-selector input {
+            margin: 5px;
+            padding: 5px;
+        }
+        .date-selector button {
+            margin: 5px;
+            padding: 5px 10px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .date-selector button:hover {
+            background-color: #45a049;
+        }
+        .summary-window {
+            position: fixed;
+            background: white;
+            padding: 15px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.2);
+            max-width: 500px;
+            z-index: 9999;
+        }
+        .summary-header {
+            cursor: move;
+            padding: 5px;
+            margin: -15px -15px 10px -15px;
+            background: #4CAF50;
+            color: white;
+            border-radius: 5px 5px 0 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .summary-content {
+            display: block;
+            transition: all 0.3s ease;
+        }
+        .summary-content.collapsed {
+            display: none;
+        }
+        .toggle-button {
+            background: none;
+            border: none;
+            color: white;
+            cursor: pointer;
+            font-size: 20px;
+            padding: 0 5px;
+        }
+        .toggle-button:hover {
+            opacity: 0.8;
+        }
+        .project-row {
+            border-bottom: 1px solid #eee;
+            font-weight: bold;
+            background-color: #fff;
+        }
+        .area-row {
+            border-bottom: 1px solid #eee;
+            background-color: #f5f5f5;
+            font-weight: bold;
+        }
+        .activity-row {
+            border-bottom: 1px solid #eee;
+            background-color: #f9f9f9;
+            font-size: 0.9em;
+        }
+        .activity-cell {
+            padding: 5px;
+            padding-left: 20px;
+        }
+        .hours-cell {
+            padding: 5px;
+            text-align: right;
+        }
+        .percent-cell {
+            padding: 5px;
+            text-align: right;
+        }
+    `;
+    document.head.appendChild(style);
+    // Lebegő gomb létrehozása
+    console.log('Lebegő gomb létrehozása...');
+    const floatingButton = document.createElement('div');
+    floatingButton.className = 'floating-button';
+    floatingButton.innerHTML = 'Munkaidő Összesítő';
+    floatingButton.style.left = '20px';
+    floatingButton.style.top = '20px';
+
+    // Dátumválasztó panel létrehozása
+    console.log('Dátumválasztó panel létrehozása...');
+    const dateSelector = document.createElement('div');
+    dateSelector.className = 'date-selector';
+    dateSelector.innerHTML = `
+        <div>Kezdő dátum: <input type="date" id="startDate"></div>
+        <div>Vég dátum: <input type="date" id="endDate"></div>
+        <button id="calculateButton">Számítás</button>
+    `;
+    dateSelector.style.left = '20px';
+    dateSelector.style.top = '70px';
+
+    document.body.appendChild(floatingButton);
+    document.body.appendChild(dateSelector);
+
+    // Gomb mozgatás kezelése
+    function dragStart(e) {
+        console.log('Gomb mozgatás kezdődik...');
+        initialX = e.clientX - xOffset;
+        initialY = e.clientY - yOffset;
+
+        if (e.target === floatingButton) {
+            isDragging = true;
+        }
+    }
+
+    function dragEnd(e) {
+        console.log('Gomb mozgatás befejeződött');
+        initialX = currentX;
+        initialY = currentY;
+        isDragging = false;
+    }
+
+    function drag(e) {
+        if (isDragging) {
+            e.preventDefault();
+            currentX = e.clientX - initialX;
+            currentY = e.clientY - initialY;
+            xOffset = currentX;
+            yOffset = currentY;
+            floatingButton.style.transform = `translate3d(${currentX}px, ${currentY}px, 0)`;
+
+            // Dátumválasztó panel mozgatása a gombbal együtt
+            if (dateSelector.style.display !== 'none') {
+                const buttonRect = floatingButton.getBoundingClientRect();
+                dateSelector.style.left = `${buttonRect.left}px`;
+                dateSelector.style.top = `${buttonRect.bottom + 10}px`;
+            }
+        }
+    }
+
+    // Eseménykezelők hozzáadása
+    console.log('Eseménykezelők hozzáadása...');
+    floatingButton.addEventListener('mousedown', dragStart);
+    document.addEventListener('mousemove', drag);
+    document.addEventListener('mouseup', dragEnd);
+
+    // Gomb kattintás kezelése
+    floatingButton.addEventListener('click', function(e) {
+        if (!isDragging) {
+            console.log('Dátumválasztó panel megjelenítése/elrejtése');
+            dateSelector.style.display = dateSelector.style.display === 'none' ? 'block' : 'none';
+            if (dateSelector.style.display === 'block') {
+                const buttonRect = floatingButton.getBoundingClientRect();
+                dateSelector.style.left = `${buttonRect.left}px`;
+                dateSelector.style.top = `${buttonRect.bottom + 10}px`;
+            }
+        }
+    });
+
+    // Projekt összesítő objektum
+    let projectSummary = {};
+    let totalHours = 0;
+
+    // Segédfüggvények
+    function formatDate(date) {
+        const d = new Date(date);
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${year}.${month}.${day}`;
+    }
+
+    function convertTimeToHours(timeStr) {
+        if (!timeStr || timeStr === '-') return 0;
+        const [hours, minutes] = timeStr.split(':').map(Number);
+        return hours + (minutes / 60);
+    }
+    // Projekt adatok feldolgozása
+    function processProjectData() {
+        console.log('Projekt adatok feldolgozása kezdődik...');
+        const projectRows = document.querySelectorAll('#form\\:workingTimes_data tr');
+        console.log(`Talált projekt sorok száma: ${projectRows.length}`);
+
+        projectRows.forEach(row => {
+            const projectInput = row.querySelector('input[id*="j_idt1384_input"]');
+            if (!projectInput) {
+                console.log('Projekt input nem található a sorban');
+                return;
+            }
+
+            const projectName = projectInput.value;
+
+            const areaInput = row.querySelector('input[id*="areaComp_input"]');
+            const area = areaInput && !areaInput.disabled && areaInput.value ? areaInput.value : '';
+
+            const activityInput = row.querySelector('input[id*="j_idt1387_input"]');
+            const activity = activityInput ? activityInput.value : '';
+
+            const timeInput = row.querySelector('input[id*="j_idt1389"]');
+            if (!timeInput) {
+                console.log('Idő input nem található a sorban');
+                return;
+            }
+
+            const timeStr = timeInput.value;
+            const hours = convertTimeToHours(timeStr);
+
+            if (!projectName || !hours) {
+                console.log('Hiányzó projekt név vagy óra:', { projectName, hours });
+                return;
+            }
+
+            // Projekt struktúra létrehozása
+            if (!projectSummary[projectName]) {
+                projectSummary[projectName] = {
+                    hours: 0,
+                    percentage: 0,
+                    areas: {},
+                    activities: {}, // Közvetlen tevékenységek a projekthez
+                    hasAreas: false
+                };
+            }
+
+            // Ha NAK support vagy nincs terület
+            if (projectName === 'NAK support' || !area) {
+                if (activity) {
+                    if (!projectSummary[projectName].activities[activity]) {
+                        projectSummary[projectName].activities[activity] = {
+                            hours: 0,
+                            percentage: 0
+                        };
+                    }
+                    projectSummary[projectName].activities[activity].hours += hours;
+                }
+            } else {
+                // Területek kezelése
+                projectSummary[projectName].hasAreas = true;
+                if (!projectSummary[projectName].areas[area]) {
+                    projectSummary[projectName].areas[area] = {
+                        hours: 0,
+                        percentage: 0,
+                        activities: {}
+                    };
+                }
+                if (activity) {
+                    if (!projectSummary[projectName].areas[area].activities[activity]) {
+                        projectSummary[projectName].areas[area].activities[activity] = {
+                            hours: 0,
+                            percentage: 0
+                        };
+                    }
+                    projectSummary[projectName].areas[area].activities[activity].hours += hours;
+                }
+                projectSummary[projectName].areas[area].hours += hours;
+            }
+
+            projectSummary[projectName].hours += hours;
+            totalHours += hours;
+            console.log(`Projekt óra hozzáadva: ${projectName} - ${hours} óra (Összesen: ${projectSummary[projectName].hours})`);
+        });
+
+        // Százalékok számítása
+        Object.keys(projectSummary).forEach(projectName => {
+            const project = projectSummary[projectName];
+            project.percentage = (project.hours / totalHours) * 100;
+
+            // Közvetlen tevékenységek százalékai
+            Object.keys(project.activities).forEach(activity => {
+                project.activities[activity].percentage =
+                    (project.activities[activity].hours / project.hours) * 100;
+            });
+
+            // Területek és azok tevékenységeinek százalékai
+            if (project.hasAreas) {
+                Object.keys(project.areas).forEach(area => {
+                    const areaData = project.areas[area];
+                    areaData.percentage = (areaData.hours / project.hours) * 100;
+
+                    Object.keys(areaData.activities).forEach(activity => {
+                        areaData.activities[activity].percentage =
+                            (areaData.activities[activity].hours / areaData.hours) * 100;
+                    });
+                });
+            }
+        });
+
+        console.log('Projekt adatok feldolgozása befejezve.');
+        console.log('Projekt összesítés:', projectSummary);
+        console.log('Összes óra:', totalHours);
+    }
+    // Eredmények megjelenítése
+    function displayResults() {
+        console.log('Eredmények megjelenítése kezdődik...');
+
+        if (totalHours === 0) {
+            console.warn('Nincs feldolgozható adat!');
+            alert('Nincs feldolgozható adat a kiválasztott időszakban!');
+            return;
+        }
+
+        let resultHTML = `
+            <div id="projectSummaryResults" class="summary-window" style="top: 20px; right: 20px;">
+                <div class="summary-header">
+                    <span>Projekt Összesítés</span>
+                    <button class="toggle-button">−</button>
+                </div>
+                <div class="summary-content">
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <tr style="background: #f5f5f5;">
+                            <th style="padding: 5px; text-align: left;">Projekt / Terület / Tevékenység</th>
+                            <th style="padding: 5px; text-align: right;">Órák</th>
+                            <th style="padding: 5px; text-align: right;">%</th>
+                        </tr>
+        `;
+
+        Object.keys(projectSummary).sort().forEach(projectName => {
+            const project = projectSummary[projectName];
+            // Projekt sor
+            resultHTML += `
+                <tr class="project-row">
+                    <td style="padding: 5px;">${projectName}</td>
+                    <td class="hours-cell">${project.hours.toFixed(2)}</td>
+                    <td class="percent-cell">${project.percentage.toFixed(1)}%</td>
+                </tr>
+            `;
+
+            if (project.hasAreas) {
+                // Területek és azok tevékenységei
+                Object.keys(project.areas).sort().forEach(area => {
+                    const areaData = project.areas[area];
+                    resultHTML += `
+                        <tr class="area-row">
+                            <td style="padding: 5px; padding-left: 20px;">└ ${area}</td>
+                            <td class="hours-cell">${areaData.hours.toFixed(2)}</td>
+                            <td class="percent-cell">${areaData.percentage.toFixed(1)}%</td>
+                        </tr>
+                    `;
+
+                    // Terület tevékenységei
+                    Object.keys(areaData.activities).sort().forEach(activity => {
+                        const activityData = areaData.activities[activity];
+                        resultHTML += `
+                            <tr class="activity-row">
+                                <td class="activity-cell" style="padding-left: 40px;">└ ${activity}</td>
+                                <td class="hours-cell">${activityData.hours.toFixed(2)}</td>
+                                <td class="percent-cell">${activityData.percentage.toFixed(1)}%</td>
+                            </tr>
+                        `;
+                    });
+                });
+            }
+
+            // Közvetlen tevékenységek megjelenítése
+            if (Object.keys(project.activities).length > 0) {
+                Object.keys(project.activities).sort().forEach(activity => {
+                    const activityData = project.activities[activity];
+                    resultHTML += `
+                        <tr class="activity-row">
+                            <td class="activity-cell" style="padding-left: 20px;">└ ${activity}</td>
+                            <td class="hours-cell">${activityData.hours.toFixed(2)}</td>
+                            <td class="percent-cell">${activityData.percentage.toFixed(1)}%</td>
+                        </tr>
+                    `;
+                });
+            }
+        });
+
+        resultHTML += `
+                        <tr style="border-top: 2px solid #ccc; font-weight: bold;">
+                            <td style="padding: 5px;">Összesen</td>
+                            <td class="hours-cell">${totalHours.toFixed(2)}</td>
+                            <td class="percent-cell">100%</td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+        `;
+
+        const oldResults = document.getElementById('projectSummaryResults');
+        if (oldResults) {
+            oldResults.remove();
+        }
+
+        const resultDiv = document.createElement('div');
+        resultDiv.innerHTML = resultHTML;
+        const summaryWindow = resultDiv.firstElementChild;
+        document.body.appendChild(summaryWindow);
+
+        // Összecsukás/kinyitás kezelése
+        const toggleButton = summaryWindow.querySelector('.toggle-button');
+        const content = summaryWindow.querySelector('.summary-content');
+        toggleButton.addEventListener('click', () => {
+            content.classList.toggle('collapsed');
+            toggleButton.textContent = content.classList.contains('collapsed') ? '+' : '−';
+            console.log('Összesítő ablak állapota változott:', content.classList.contains('collapsed') ? 'összecsukva' : 'kinyitva');
+        });
+
+        // Mozgatás kezelése
+        const header = summaryWindow.querySelector('.summary-header');
+        let isDragging = false;
+        let currentX;
+        let currentY;
+        let initialX;
+        let initialY;
+        let xOffset = 0;
+        let yOffset = 0;
+
+        function dragStart(e) {
+            initialX = e.clientX - xOffset;
+            initialY = e.clientY - yOffset;
+
+            if (e.target.closest('.summary-header')) {
+                isDragging = true;
+                console.log('Összesítő ablak mozgatás kezdődik');
+            }
+        }
+
+        function dragEnd(e) {
+            initialX = currentX;
+            initialY = currentY;
+            isDragging = false;
+            console.log('Összesítő ablak mozgatás befejeződött');
+        }
+
+        function drag(e) {
+            if (isDragging) {
+                e.preventDefault();
+                currentX = e.clientX - initialX;
+                currentY = e.clientY - initialY;
+
+                xOffset = currentX;
+                yOffset = currentY;
+
+                summaryWindow.style.transform = `translate3d(${currentX}px, ${currentY}px, 0)`;
+            }
+        }
+
+        header.addEventListener('mousedown', dragStart);
+        document.addEventListener('mousemove', drag);
+        document.addEventListener('mouseup', dragEnd);
+
+        console.log('Eredmények megjelenítése befejezve.');
+    }
+    // Kijelölés törlése
+    function clearSelection() {
+        console.log('Kijelölés törlése kezdődik...');
+        const selectedCheckbox = document.querySelector('.ui-chkbox-box.ui-state-active');
+        if (selectedCheckbox) {
+            console.log('Aktív kijelölés található, törlés...');
+            selectedCheckbox.click();
+            return new Promise(resolve => setTimeout(resolve, 500));
+        }
+        console.log('Nincs aktív kijelölés.');
+        return Promise.resolve();
+    }
+
+    // Nap kijelölése és adatok lekérése
+    async function selectAndProcessDay(date) {
+        const formattedDate = formatDate(date);
+        console.log(`Nap feldolgozása kezdődik: ${formattedDate}`);
+
+        // Előző kijelölés törlése
+        await clearSelection();
+
+        const rows = document.querySelectorAll('#form\\:workingTimeDays_data tr');
+        console.log(`Talált nap sorok száma: ${rows.length}`);
+
+        for (const row of rows) {
+            const dateCell = row.querySelector('td:nth-child(2)');
+            if (dateCell && dateCell.textContent === formattedDate) {
+                const workdayCell = row.querySelector('td:nth-child(4)');
+                console.log(`Dátum találat: ${formattedDate}, munkarend: ${workdayCell ? workdayCell.textContent : 'nem található'}`);
+
+                // Csak akkor dolgozzuk fel, ha munkanap
+                if (workdayCell && workdayCell.textContent.includes('munkanap')) {
+                    const checkbox = row.querySelector('.ui-chkbox-box');
+                    if (checkbox) {
+                        console.log(`Munkanap kijelölése: ${formattedDate}`);
+                        checkbox.click();
+                        // Várunk, hogy betöltődjenek az adatok
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        processProjectData();
+                        break;
+                    }
+                } else {
+                    console.log(`Nem munkanap, kihagyva: ${formattedDate}`);
+                }
+            }
+        }
+        console.log(`Nap feldolgozása befejezve: ${formattedDate}`);
+    }
+
+    // Számítás gomb eseménykezelő
+    document.getElementById('calculateButton').addEventListener('click', async function() {
+        console.log('Számítás kezdődik...');
+        const startDate = new Date(document.getElementById('startDate').value);
+        const endDate = new Date(document.getElementById('endDate').value);
+
+        console.log('Kiválasztott időszak:', {
+            startDate: startDate.toISOString(),
+            endDate: endDate.toISOString()
+        });
+
+        if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+            console.error('Érvénytelen dátumok!');
+            alert('Kérlek adj meg érvényes dátumokat!');
+            return;
+        }
+
+        projectSummary = {};
+        totalHours = 0;
+
+        try {
+            // Kezdeti kijelölés törlése
+            await clearSelection();
+
+            // Végigmegyünk a dátumokon
+            for (let date = new Date(startDate); date <= endDate; date.setDate(date.getDate() + 1)) {
+                await selectAndProcessDay(date);
+            }
+
+            // Végső kijelölés törlése
+            await clearSelection();
+
+            console.log('Végső összesítés:', {
+                projectSummary,
+                totalHours
+            });
+
+            displayResults();
+            console.log('Számítás sikeresen befejezve.');
+        } catch (error) {
+            console.error('Hiba történt:', error);
+            alert('Hiba történt az adatok feldolgozása során!');
+        }
+    });
+
+    console.log('TER Munkaidő Összesítő szkript betöltése befejezve.');
+})();
