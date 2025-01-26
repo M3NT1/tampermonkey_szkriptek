@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TER Munkaidő Összesítő
 // @namespace    http://tampermonkey.net/
-// @version      1.3
+// @version      1.4
 // @description  Munkaidő összesítő szkript a TER rendszerhez
 // @author       M3NT1
 // @match        https://ter.ulyssys.hu/ter/wt/wtown*
@@ -166,6 +166,7 @@
         }
     `;
     document.head.appendChild(style);
+
     // Lebegő gomb létrehozása
     console.log('Lebegő gomb létrehozása...');
     const floatingButton = document.createElement('div');
@@ -319,6 +320,7 @@
             }
         }
     });
+
     // Segédfüggvények
     function formatDate(date) {
         const d = new Date(date);
@@ -588,6 +590,7 @@
             }
         });
     }
+
     // Eredmények megjelenítése
     function displayResults() {
         console.log('Eredmények megjelenítése kezdődik...');
@@ -783,7 +786,6 @@
 
         console.log('Eredmények megjelenítése befejezve.');
     }
-
     // Kijelölés törlése
     function clearSelection() {
         console.log('Kijelölés törlése kezdődik...');
@@ -811,14 +813,15 @@
         for (const row of rows) {
             const dateCell = row.querySelector('td:nth-child(2)');
             if (dateCell && dateCell.textContent === formattedDate) {
-                const workdayCell = row.querySelector('td:nth-child(4)');
-                console.log(`Dátum találat: ${formattedDate}, munkarend: ${workdayCell ? workdayCell.textContent : 'nem található'}`);
+                // Ellenőrizzük, hogy van-e könyvelt idő a napra
+                const timeCell = row.querySelector('td:nth-child(5)');
+                const timeValue = timeCell ? timeCell.textContent.trim() : '';
 
-                // Csak akkor dolgozzuk fel, ha munkanap
-                if (workdayCell && workdayCell.textContent.includes('munkanap')) {
+                // Ha van könyvelt idő és az nem "-" karakter
+                if (timeCell && timeValue && timeValue !== '-') {
                     const checkbox = row.querySelector('.ui-chkbox-box');
                     if (checkbox) {
-                        console.log(`Munkanap kijelölése: ${formattedDate}`);
+                        console.log(`Nap kijelölése könyvelt idővel: ${formattedDate}, idő: ${timeValue}`);
                         checkbox.click();
                         // Várunk, hogy betöltődjenek az adatok
                         await new Promise(resolve => setTimeout(resolve, 1000));
@@ -826,8 +829,9 @@
                         break;
                     }
                 } else {
-                    console.log(`Nem munkanap, kihagyva: ${formattedDate}`);
+                    console.log(`Nincs könyvelt idő vagy "-" karakter, kihagyva: ${formattedDate}`);
                 }
+                break;
             }
         }
         console.log(`Nap feldolgozása befejezve: ${formattedDate}`);
