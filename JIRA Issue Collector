@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JIRA Issue Collector
 // @namespace    http://tampermonkey.net/
-// @version      2.8
+// @version      2.9
 // @description  Collect JIRA issues data with grouping by assignee from all pages - With pagination support
 // @author       M3NT1
 // @match        https://jira.ulyssys.hu/issues/*
@@ -11,10 +11,22 @@
 (function() {
     'use strict';
 
-    window.addEventListener('load', function() {
+    // DOM változásfigyelő létrehozása
+    const observer = new MutationObserver((mutations, obs) => {
         const scriptRunnerBtn = document.querySelector('#sr-jql-query-builder');
-        if (!scriptRunnerBtn) return;
+        if (scriptRunnerBtn) {
+            obs.disconnect(); // Leállítjuk a figyelést ha megtaláltuk a gombot
+            initializeCollectButton(scriptRunnerBtn);
+        }
+    });
 
+    // DOM figyelés indítása
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true
+    });
+
+    function initializeCollectButton(scriptRunnerBtn) {
         const collectButton = document.createElement('button');
         collectButton.className = 'aui-button aui-button-subtle';
         collectButton.style.marginLeft = '5px';
@@ -132,6 +144,7 @@
 
             return missingColumns;
         }
+
         async function getAllIssues() {
             try {
                 const missingColumns = checkRequiredColumns();
@@ -326,5 +339,5 @@
         }
 
         collectButton.addEventListener('click', getAllIssues);
-    });
+    }
 })();
