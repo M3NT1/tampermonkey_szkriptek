@@ -1,0 +1,243 @@
+// ==UserScript==
+// @name         Jira Assistant Munkaidő Megoszlás
+// @namespace    http://tampermonkey.net/
+// @version      1.0
+// @description  Munkaidő megoszlás számítás EFOP és EKOZIG projektek között a Jira Assistant-ben
+// @author       Your Name
+// @match        https://app.jiraassistant.com/2/calendar
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // Stílusok hozzáadása
+    const style = document.createElement('style');
+    style.textContent = `
+        .worktime-stats {
+            position: fixed;
+            top: 100px;
+            right: 20px;
+            background: white;
+            border: 1px solid #ccc;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            z-index: 9999;
+            min-width: 300px;
+            cursor: move;
+            user-select: none;
+        }
+        .worktime-stats h3 {
+            margin: 0 0 10px 0;
+            padding-bottom: 5px;
+            border-bottom: 1px solid #eee;
+        }
+        .worktime-stats .stat-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 5px 0;
+        }
+        .worktime-stats .total {
+            margin-top: 10px;
+            padding-top: 5px;
+            border-top: 1px solid #eee;
+            font-weight: bold;
+        }
+        .worktime-stats .percentage {
+            color: #666;
+            font-size: 0.9em;
+        }
+        .refresh-btn {
+            margin-top: 10px;
+            padding: 5px 10px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .refresh-btn:hover {
+            background: #45a049;
+        }
+        .warning {
+            color: #ff4444;
+            margin-top: 5px;
+            font-size: 0.9em;
+        }
+    `;
+    document.head.appendChild(style);
+
+    // Segédfüggvény az időtartam percekké konvertálásához
+    function convertToMinutes(timeStr) {
+        if (!timeStr) return 0;
+        const matches = timeStr.match(/(?:(\d+)h\s*)?(?:(\d+)m)?/);
+        if (!matches) return 0;
+        const hours = parseInt(matches[1] || 0);
+        const minutes = parseInt(matches[2] || 0);
+        return hours * 60 + minutes;
+    }
+
+    // Munkaidő számítás
+    function calculateWorkTime() {
+        const events = document.querySelectorAll('.fc-event');
+        let efopTime = 0;
+        let ekozigTime = 0;
+
+        events.forEach(event => {
+            const titleElement = event.querySelector('.fc-title');
+            if (!titleElement) return;
+
+            const timeElement = event.querySelector('.fc-hour');
+            if (!timeElement) return;
+
+            const title = titleElement.textContent;
+            const timeMatch = timeElement.textContent.match(/\((.*?)\)/);
+            if (!timeMatch) return;
+
+            const time = timeMatch[1].trim();
+            const minutes = convertToMinutes(time);
+
+            if (title.includes('IIER2ELES')) {
+                efopTime += minutes;
+            } else if (title.includes('EKOZIG')) {
+                ekozigTime += minutes;
+            }
+        });
+
+        const totalTime = efopTime + ekozigTime;
+        const efopPercentage = totalTime ? ((efopTime / totalTime) * 100).toFixed(1) : 0;
+        const ekozigPercentage = totalTime ? ((ekozigTime / totalTime) * 100).toFixed(1) : 0;
+
+        return {
+            efop: {
+                minutes: efopTime,
+                hours: Math.floor(efopTime / 60),
+                remainingMinutes: efopTime % 60,
+                percentage: efopPercentage
+            },
+            ekozig: {
+                minutes: ekozigTime,
+                hours: Math.floor(ekozigTime / 60),
+                remainingMinutes: ekozigTime % 60,
+                percentage: ekozigPercentage
+            },
+            total: {
+                minutes: totalTime,
+                hours: Math.floor(totalTime / 60),
+                remainingMinutes: totalTime % 60
+            }
+        };
+    }
+
+    // Statisztika panel létrehozása
+    function createStatsPanel() {
+        const panel = document.createElement('div');
+        panel.className = 'worktime-stats';
+        panel.innerHTML = `
+            <h3>Munkaidő Megoszlás</h3>
+            <div id="stats-content"></div>
+            <button class="refresh-btn">Frissítés</button>
+        `;
+
+        // Drag and drop funkcionalitás
+        let isDragging = false;
+        let currentX;
+        let currentY;
+        let initialX;
+        let initialY;
+        let xOffset = 0;
+        let yOffset = 0;
+
+        panel.addEventListener('mousedown', dragStart);
+        document.addEventListener('mousemove', drag);
+        document.addEventListener('mouseup', dragEnd);
+
+        function dragStart(e) {
+            if (e.target.classList.contains('refresh-btn')) return;
+
+            initialX = e.clientX - xOffset;
+            initialY = e.clientY - yOffset;
+            isDragging = true;
+        }
+
+        function drag(e) {
+            if (isDragging) {
+                e.preventDefault();
+                currentX = e.clientX - initialX;
+                currentY = e.clientY - initialY;
+                xOffset = currentX;
+                yOffset = currentY;
+                panel.style.transform = `translate(${currentX}px, ${currentY}px)`;
+            }
+        }
+
+        function dragEnd() {
+            isDragging = false;
+        }
+
+        // Frissítés gomb funkcionalitás
+        panel.querySelector('.refresh-btn').addEventListener('click', updateStats);
+
+        document.body.appendChild(panel);
+        updateStats();
+    }
+
+    // Statisztika frissítése
+    function updateStats() {
+        const stats = calculateWorkTime();
+        const content = document.getElementById('stats-content');
+
+        content.innerHTML = `
+            <div class="stat-row">
+                <span>EFOP (IIER2ELES):</span>
+                <span>${stats.efop.hours}h ${stats.efop.remainingMinutes}m
+                    <span class="percentage">(${stats.efop.percentage}%)</span>
+                </span>
+            </div>
+            <div class="stat-row">
+                <span>EKOZIG:</span>
+                <span>${stats.ekozig.hours}h ${stats.ekozig.remainingMinutes}m
+                    <span class="percentage">(${stats.ekozig.percentage}%)</span>
+                </span>
+            </div>
+            <div class="stat-row total">
+                <span>Összesen:</span>
+                <span>${stats.total.hours}h ${stats.total.remainingMinutes}m</span>
+            </div>
+            ${Math.abs(stats.efop.percentage - 50) > 10 ?
+            `<div class="warning">⚠️ Az arány jelentősen eltér az 50-50%-tól!</div>` : ''}
+        `;
+    }
+
+    // Várakozás a naptár betöltődésére és panel létrehozása
+    function init() {
+        const observer = new MutationObserver((mutations, obs) => {
+            if (document.querySelector('.fc-view-harness')) {
+                setTimeout(() => {
+                    createStatsPanel();
+                    // Figyelés az oldal frissítésekre
+                    const calendarView = document.querySelector('.calendar-view');
+                    if (calendarView) {
+                        new MutationObserver(() => {
+                            updateStats();
+                        }).observe(calendarView, {
+                            childList: true,
+                            subtree: true
+                        });
+                    }
+                }, 1000);
+                obs.disconnect();
+            }
+        });
+
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+    }
+
+    // Szkript inicializálása
+    init();
+
+})();
