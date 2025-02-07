@@ -385,100 +385,129 @@
 
     // Összes adat feldolgozása
     function processAllData() {
-        projectSummary = {
-            NAK: {
-                hours: 0,
-                percentage: 0,
-                projects: {},
-                isNakMainProject: true
+    projectSummary = {
+        NAK: {
+            hours: 0,
+            percentage: 0,
+            projects: {},
+            isNakMainProject: true
+        }
+    };
+    totalHours = 0;
+
+    allProjectData.forEach(dayData => {
+        totalHours += dayData.totalHours;
+
+        // NAK projektek feldolgozása
+        Object.entries(dayData.nakProjects.projects).forEach(([projectName, project]) => {
+            if (!projectSummary.NAK.projects[projectName]) {
+                projectSummary.NAK.projects[projectName] = {
+                    hours: 0,
+                    percentage: 0,
+                    areas: {},
+                    activities: {},
+                    hasAreas: false
+                };
             }
-        };
-        totalHours = 0;
 
-        allProjectData.forEach(dayData => {
-            totalHours += dayData.totalHours;
+            const summaryProject = projectSummary.NAK.projects[projectName];
+            summaryProject.hours += project.hours;
+            projectSummary.NAK.hours += project.hours; // Ez hiányzott - NAK főprojekt órák összesítése
+            summaryProject.hasAreas = summaryProject.hasAreas || project.hasAreas;
 
-            // NAK projektek feldolgozása
-            Object.entries(dayData.nakProjects.projects).forEach(([projectName, project]) => {
-                if (!projectSummary.NAK.projects[projectName]) {
-                    projectSummary.NAK.projects[projectName] = {
+            // Területek összesítése
+            Object.entries(project.areas).forEach(([area, areaData]) => {
+                if (!summaryProject.areas[area]) {
+                    summaryProject.areas[area] = {
                         hours: 0,
                         percentage: 0,
-                        areas: {},
-                        activities: {},
-                        hasAreas: false
+                        activities: {}
                     };
                 }
+                summaryProject.areas[area].hours += areaData.hours;
 
-                const summaryProject = projectSummary.NAK.projects[projectName];
-                summaryProject.hours += project.hours;
-                summaryProject.hasAreas = summaryProject.hasAreas || project.hasAreas;
-
-                // Területek összesítése
-                Object.entries(project.areas).forEach(([area, areaData]) => {
-                    if (!summaryProject.areas[area]) {
-                        summaryProject.areas[area] = {
-                            hours: 0,
-                            percentage: 0,
-                            activities: {}
-                        };
-                    }
-                    summaryProject.areas[area].hours += areaData.hours;
-
-                    // Terület tevékenységeinek összesítése
-                    Object.entries(areaData.activities).forEach(([activity, activityData]) => {
-                        if (!summaryProject.areas[area].activities[activity]) {
-                            summaryProject.areas[area].activities[activity] = {
-                                hours: 0,
-                                percentage: 0
-                            };
-                        }
-                        summaryProject.areas[area].activities[activity].hours += activityData.hours;
-                    });
-                });
-
-                // Tevékenységek összesítése
-                Object.entries(project.activities).forEach(([activity, activityData]) => {
-                    if (!summaryProject.activities[activity]) {
-                        summaryProject.activities[activity] = {
+                // Terület tevékenységeinek összesítése
+                Object.entries(areaData.activities).forEach(([activity, activityData]) => {
+                    if (!summaryProject.areas[area].activities[activity]) {
+                        summaryProject.areas[area].activities[activity] = {
                             hours: 0,
                             percentage: 0
                         };
                     }
-                    summaryProject.activities[activity].hours += activityData.hours;
+                    summaryProject.areas[area].activities[activity].hours += activityData.hours;
                 });
             });
 
-            // Egyéb projektek feldolgozása
-            Object.entries(dayData.otherProjects).forEach(([projectName, project]) => {
-                if (!projectSummary[projectName]) {
-                    projectSummary[projectName] = {
+            // Tevékenységek összesítése
+            Object.entries(project.activities).forEach(([activity, activityData]) => {
+                if (!summaryProject.activities[activity]) {
+                    summaryProject.activities[activity] = {
                         hours: 0,
-                        percentage: 0,
-                        activities: {},
-                        hasAreas: false
+                        percentage: 0
                     };
                 }
-
-                const summaryProject = projectSummary[projectName];
-                summaryProject.hours += project.hours;
-
-                // Tevékenységek összesítése
-                Object.entries(project.activities).forEach(([activity, activityData]) => {
-                    if (!summaryProject.activities[activity]) {
-                        summaryProject.activities[activity] = {
-                            hours: 0,
-                            percentage: 0
-                        };
-                    }
-                    summaryProject.activities[activity].hours += activityData.hours;
-                });
+                summaryProject.activities[activity].hours += activityData.hours;
             });
         });
 
-        // Százalékok számítása
-        calculatePercentages();
-    }
+        // Egyéb projektek feldolgozása
+        Object.entries(dayData.otherProjects).forEach(([projectName, project]) => {
+            if (!projectSummary[projectName]) {
+                projectSummary[projectName] = {
+                    hours: 0,
+                    percentage: 0,
+                    activities: {},
+                    hasAreas: false
+                };
+            }
+
+            const summaryProject = projectSummary[projectName];
+            summaryProject.hours += project.hours;
+
+            // Tevékenységek összesítése
+            Object.entries(project.activities).forEach(([activity, activityData]) => {
+                if (!summaryProject.activities[activity]) {
+                    summaryProject.activities[activity] = {
+                        hours: 0,
+                        percentage: 0
+                    };
+                }
+                summaryProject.activities[activity].hours += activityData.hours;
+            });
+        });
+    });
+
+    // Százalékok számítása
+    calculatePercentages();
+}
+
+function calculatePercentages() {
+    Object.values(projectSummary).forEach(project => {
+        project.percentage = (project.hours / totalHours) * 100;
+
+        if (project.isNakMainProject) {
+            Object.values(project.projects).forEach(nakProject => {
+                nakProject.percentage = (nakProject.hours / project.hours) * 100; // NAK alprojektek százaléka a NAK főprojekthez viszonyítva
+
+                Object.values(nakProject.areas).forEach(area => {
+                    area.percentage = (area.hours / nakProject.hours) * 100;
+                    Object.values(area.activities).forEach(activity => {
+                        activity.percentage = (activity.hours / area.hours) * 100;
+                    });
+                });
+
+                Object.values(nakProject.activities).forEach(activity => {
+                    activity.percentage = (activity.hours / nakProject.hours) * 100;
+                });
+            });
+        } else {
+            Object.values(project.activities).forEach(activity => {
+                activity.percentage = (activity.hours / project.hours) * 100;
+            });
+        }
+    });
+}
+
 
     function calculatePercentages() {
         Object.values(projectSummary).forEach(project => {
