@@ -1,0 +1,137 @@
+// ==UserScript==
+// @name         JIRA Version Table Sorter
+// @namespace    http://tampermonkey.net/
+// @version      1.0
+// @description  Add sorting functionality to JIRA version table headers
+// @author       M3NT1
+// @match        https://jira.ulyssys.hu/projects/*?selectedItem=com.atlassian.jira.jira-projects-plugin:release-page*
+// @match        https://jira.ulyssys.hu/projects/*?selectedItem=com.atlassian.jira.jira-projects-plugin%3Arelease-page*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // Várjuk meg, amíg a táblázat betöltődik
+    function waitForTable() {
+        const table = document.querySelector('#versions-table');
+        if (table) {
+            initSorting();
+        } else {
+            setTimeout(waitForTable, 500);
+        }
+    }
+
+    function initSorting() {
+        const table = document.querySelector('#versions-table');
+        const headers = table.querySelectorAll('th:not(:first-child):not(:last-child)'); // Kihagyjuk az első és utolsó oszlopot
+
+        // Stílus hozzáadása
+        const style = document.createElement('style');
+        style.textContent = `
+            .sort-header {
+                cursor: pointer;
+                position: relative;
+            }
+            .sort-header:hover {
+                background-color: #f4f5f7;
+            }
+            .sort-header::after {
+                content: '↕';
+                position: absolute;
+                right: 8px;
+                color: #999;
+            }
+            .sort-header.sort-asc::after {
+                content: '↑';
+                color: #0052CC;
+            }
+            .sort-header.sort-desc::after {
+                content: '↓';
+                color: #0052CC;
+            }
+        `;
+        document.head.appendChild(style);
+
+        // Fejlécek előkészítése
+        headers.forEach(header => {
+            header.classList.add('sort-header');
+            header.addEventListener('click', () => handleSort(header));
+        });
+    }
+
+    function handleSort(header) {
+        const table = document.querySelector('#versions-table');
+        const tbody = table.querySelector('tbody.items');
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+        const columnIndex = Array.from(header.parentElement.children).indexOf(header);
+        const isAsc = !header.classList.contains('sort-asc');
+
+        // Rendezési irány jelzése
+        const headers = table.querySelectorAll('th');
+        headers.forEach(h => h.classList.remove('sort-asc', 'sort-desc'));
+        header.classList.add(isAsc ? 'sort-asc' : 'sort-desc');
+
+        // Rendezés
+        rows.sort((a, b) => {
+            let aValue = getCellValue(a, columnIndex);
+            let bValue = getCellValue(b, columnIndex);
+
+            // Verzió szám speciális kezelése
+            if (header.textContent.trim() === 'Version') {
+                return compareVersions(aValue, bValue, isAsc);
+            }
+
+            // Dátum speciális kezelése
+            if (header.classList.contains('versions-table__date')) {
+                aValue = getDateValue(a.querySelector('time'));
+                bValue = getDateValue(b.querySelector('time'));
+            }
+
+            if (aValue === bValue) return 0;
+            if (aValue === '') return 1;
+            if (bValue === '') return -1;
+
+            return isAsc ?
+                (aValue < bValue ? -1 : 1) :
+                (aValue > bValue ? -1 : 1);
+        });
+
+        // Rendezett sorok visszahelyezése
+        rows.forEach(row => tbody.appendChild(row));
+    }
+
+    function getCellValue(row, index) {
+        const cell = row.querySelector(`td:nth-child(${index + 1})`);
+        return cell ? (cell.textContent || '').trim() : '';
+    }
+
+    function getDateValue(timeElement) {
+        if (!timeElement) return '';
+        const dateStr = timeElement.getAttribute('datetime');
+        return dateStr ? new Date(dateStr).getTime() : '';
+    }
+
+    function compareVersions(a, b, isAsc) {
+        // Verzió számok szétbontása komponensekre
+        const aParts = a.split('.').map(part => parseInt(part) || 0);
+        const bParts = b.split('.').map(part => parseInt(part) || 0);
+
+        // A hosszabb verzió számmal kiegészítjük a rövidebbet nullákkal
+        while (aParts.length < bParts.length) aParts.push(0);
+        while (bParts.length < aParts.length) bParts.push(0);
+
+        // Komponensenkénti összehasonlítás
+        for (let i = 0; i < aParts.length; i++) {
+            if (aParts[i] !== bParts[i]) {
+                return isAsc ?
+                    aParts[i] - bParts[i] :
+                    bParts[i] - aParts[i];
+            }
+        }
+        return 0;
+    }
+
+    // Szkript indítása
+    waitForTable();
+})();
