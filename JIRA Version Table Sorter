@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JIRA Version Table Sorter
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.1
 // @description  Add sorting functionality to JIRA version table headers
 // @author       M3NT1
 // @match        https://jira.ulyssys.hu/projects/*?selectedItem=com.atlassian.jira.jira-projects-plugin:release-page*
@@ -12,11 +12,110 @@
 (function() {
     'use strict';
 
+    // Stílusok hozzáadása
+    const style = document.createElement('style');
+    style.textContent = `
+        #reloadSortingButton {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 10000;
+            padding: 8px 16px;
+            background-color: #0052CC;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: move;
+            user-select: none;
+            font-size: 14px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        #reloadSortingButton:hover {
+            background-color: #0747A6;
+        }
+        .sort-header {
+            cursor: pointer;
+            position: relative;
+        }
+        .sort-header:hover {
+            background-color: #f4f5f7;
+        }
+        .sort-header::after {
+            content: '↕';
+            position: absolute;
+            right: 8px;
+            color: #999;
+        }
+        .sort-header.sort-asc::after {
+            content: '↑';
+            color: #0052CC;
+        }
+        .sort-header.sort-desc::after {
+            content: '↓';
+            color: #0052CC;
+        }
+    `;
+    document.head.appendChild(style);
+
+    // Mozgatható gomb létrehozása
+    function createDraggableButton() {
+        const button = document.createElement('button');
+        button.id = 'reloadSortingButton';
+        button.textContent = '↻ Reload Sorting';
+        document.body.appendChild(button);
+
+        let isDragging = false;
+        let currentX;
+        let currentY;
+        let initialX;
+        let initialY;
+
+        button.addEventListener('mousedown', dragStart);
+        document.addEventListener('mousemove', drag);
+        document.addEventListener('mouseup', dragEnd);
+
+        function dragStart(e) {
+            initialX = e.clientX - button.offsetLeft;
+            initialY = e.clientY - button.offsetTop;
+            isDragging = true;
+        }
+
+        function drag(e) {
+            if (isDragging) {
+                e.preventDefault();
+                currentX = e.clientX - initialX;
+                currentY = e.clientY - initialY;
+
+                // Képernyő határok ellenőrzése
+                const maxX = window.innerWidth - button.offsetWidth;
+                const maxY = window.innerHeight - button.offsetHeight;
+
+                currentX = Math.min(Math.max(0, currentX), maxX);
+                currentY = Math.min(Math.max(0, currentY), maxY);
+
+                button.style.left = currentX + 'px';
+                button.style.top = currentY + 'px';
+            }
+        }
+
+        function dragEnd() {
+            isDragging = false;
+        }
+
+        // Kattintás esemény hozzáadása
+        button.addEventListener('click', function(e) {
+            if (!isDragging) {
+                initSorting();
+            }
+        });
+    }
+
     // Várjuk meg, amíg a táblázat betöltődik
     function waitForTable() {
         const table = document.querySelector('#versions-table');
         if (table) {
             initSorting();
+            createDraggableButton();
         } else {
             setTimeout(waitForTable, 500);
         }
@@ -26,37 +125,13 @@
         const table = document.querySelector('#versions-table');
         const headers = table.querySelectorAll('th:not(:first-child):not(:last-child)'); // Kihagyjuk az első és utolsó oszlopot
 
-        // Stílus hozzáadása
-        const style = document.createElement('style');
-        style.textContent = `
-            .sort-header {
-                cursor: pointer;
-                position: relative;
-            }
-            .sort-header:hover {
-                background-color: #f4f5f7;
-            }
-            .sort-header::after {
-                content: '↕';
-                position: absolute;
-                right: 8px;
-                color: #999;
-            }
-            .sort-header.sort-asc::after {
-                content: '↑';
-                color: #0052CC;
-            }
-            .sort-header.sort-desc::after {
-                content: '↓';
-                color: #0052CC;
-            }
-        `;
-        document.head.appendChild(style);
-
         // Fejlécek előkészítése
         headers.forEach(header => {
             header.classList.add('sort-header');
-            header.addEventListener('click', () => handleSort(header));
+            // Eltávolítjuk a régi eseménykezelőket
+            const newHeader = header.cloneNode(true);
+            header.parentNode.replaceChild(newHeader, header);
+            newHeader.addEventListener('click', () => handleSort(newHeader));
         });
     }
 
