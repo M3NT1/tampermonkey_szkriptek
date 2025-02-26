@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         Jira Assistant Munkaidő Megoszlás
 // @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  Munkaidő megoszlás számítás EFOP és EKOZIG projektek között a Jira Assistant-ben
-// @author       Your Name
+// @version      1.3
+// @description  Munkaidő megoszlás számítás projektek között a Jira Assistant-ben, kategorizálatlan projektek külön megjelenítésével
+// @author       M3NT1
 // @match        https://app.jiraassistant.com/2/calendar
-// @grant        none
+// @grant        GM_getValue
+// @grant        GM_setValue
 // ==/UserScript==
 
 (function() {
@@ -27,11 +28,15 @@
             min-width: 300px;
             cursor: move;
             user-select: none;
+            transition: height 0.3s ease;
         }
         .worktime-stats h3 {
             margin: 0 0 10px 0;
             padding-bottom: 5px;
             border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
         .worktime-stats .stat-row {
             display: flex;
@@ -48,7 +53,7 @@
             color: #666;
             font-size: 0.9em;
         }
-        .refresh-btn {
+        .button {
             margin-top: 10px;
             padding: 5px 10px;
             background: #4CAF50;
@@ -57,16 +62,114 @@
             border-radius: 3px;
             cursor: pointer;
         }
-        .refresh-btn:hover {
+        .button:hover {
             background: #45a049;
+        }
+        .button.settings {
+            background: #2196F3;
+            margin-right: 5px;
+        }
+        .button.settings:hover {
+            background: #1976D2;
+        }
+        .toggle-button {
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            padding: 0;
+            color: #666;
+        }
+        .toggle-button:hover {
+            color: #000;
+        }
+        .collapsed #stats-content, 
+        .collapsed .buttons-container {
+            display: none;
+        }
+        .collapsed {
+            min-width: auto;
+            padding: 10px;
+        }
+        .collapsed h3 {
+            margin: 0;
+            padding: 0;
+            border: none;
+        }
+        .settings-modal {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+            z-index: 10000;
+            min-width: 400px;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        .settings-modal.show {
+            display: block;
+        }
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 9999;
+        }
+        .modal-overlay.show {
+            display: block;
+        }
+        .project-mapping {
+            margin: 10px 0;
+            padding: 5px;
+            border: 1px solid #eee;
+            border-radius: 3px;
+        }
+        .project-mapping select {
+            margin-left: 10px;
+            padding: 3px;
         }
         .warning {
             color: #ff4444;
             margin-top: 5px;
             font-size: 0.9em;
         }
+        .buttons-container {
+            display: flex;
+            gap: 5px;
+        }
+        .uncategorized-section {
+            margin-top: 10px;
+            padding-top: 5px;
+            border-top: 1px dashed #ccc;
+        }
+        .uncategorized-section h4 {
+            margin: 0 0 5px 0;
+            color: #666;
+        }
     `;
     document.head.appendChild(style);
+
+    // Alapértelmezett projekt mappelés
+    const defaultProjectMapping = {
+        'IIER2ELES': 'EFOP',
+        'ADMIN': 'EFOP',
+        'EKOZIG': 'EKOZIG'
+    };
+
+    // Projekt mappelés betöltése vagy alapértelmezett használata
+    let projectMapping = GM_getValue('projectMapping', defaultProjectMapping);
+    
+    // Panel összecsukott állapotának betöltése
+    let isPanelCollapsed = GM_getValue('panelCollapsed', false);
 
     // Segédfüggvény az időtartam percekké konvertálásához
     function convertToMinutes(timeStr) {
@@ -78,11 +181,36 @@
         return hours * 60 + minutes;
     }
 
+    // Projekt prefixek összegyűjtése
+    function collectProjectPrefixes() {
+        const events = document.querySelectorAll('.fc-event');
+        const prefixes = new Set();
+
+        events.forEach(event => {
+            const titleElement = event.querySelector('.fc-title');
+            if (!titleElement) return;
+
+            const title = titleElement.textContent;
+            const prefix = title.split('-')[0].trim();
+            if (prefix) {
+                prefixes.add(prefix);
+            }
+        });
+
+        return Array.from(prefixes);
+    }
+
     // Munkaidő számítás
     function calculateWorkTime() {
         const events = document.querySelectorAll('.fc-event');
-        let efopTime = 0;
-        let ekozigTime = 0;
+        const projectTimes = {};
+        const uncategorizedTimes = {};
+
+        // Inicializáljuk a fő projektek időit
+        const mainProjects = new Set(Object.values(projectMapping).filter(v => v)); // Csak a nem üres értékek
+        mainProjects.forEach(project => {
+            projectTimes[project] = 0;
+        });
 
         events.forEach(event => {
             const titleElement = event.querySelector('.fc-title');
@@ -92,52 +220,143 @@
             if (!timeElement) return;
 
             const title = titleElement.textContent;
+            const prefix = title.split('-')[0].trim();
             const timeMatch = timeElement.textContent.match(/\((.*?)\)/);
             if (!timeMatch) return;
 
             const time = timeMatch[1].trim();
             const minutes = convertToMinutes(time);
 
-            if (title.includes('IIER2ELES')) {
-                efopTime += minutes;
-            } else if (title.includes('EKOZIG')) {
-                ekozigTime += minutes;
+            const mainProject = projectMapping[prefix];
+            if (mainProject) {
+                projectTimes[mainProject] += minutes;
+            } else {
+                // Ha nincs mappelve vagy "-- Nincs --" értékre van állítva
+                uncategorizedTimes[prefix] = (uncategorizedTimes[prefix] || 0) + minutes;
             }
         });
 
-        const totalTime = efopTime + ekozigTime;
-        const efopPercentage = totalTime ? ((efopTime / totalTime) * 100).toFixed(1) : 0;
-        const ekozigPercentage = totalTime ? ((ekozigTime / totalTime) * 100).toFixed(1) : 0;
+        const totalMinutes = Object.values(projectTimes).reduce((a, b) => a + b, 0) +
+                           Object.values(uncategorizedTimes).reduce((a, b) => a + b, 0);
 
-        return {
-            efop: {
-                minutes: efopTime,
-                hours: Math.floor(efopTime / 60),
-                remainingMinutes: efopTime % 60,
-                percentage: efopPercentage
-            },
-            ekozig: {
-                minutes: ekozigTime,
-                hours: Math.floor(ekozigTime / 60),
-                remainingMinutes: ekozigTime % 60,
-                percentage: ekozigPercentage
-            },
+        const result = {
+            projects: {},
+            uncategorized: {},
             total: {
-                minutes: totalTime,
-                hours: Math.floor(totalTime / 60),
-                remainingMinutes: totalTime % 60
+                minutes: totalMinutes,
+                hours: Math.floor(totalMinutes / 60),
+                remainingMinutes: totalMinutes % 60
             }
         };
+
+        // Kategorizált projektek
+        for (const [project, minutes] of Object.entries(projectTimes)) {
+            result.projects[project] = {
+                minutes: minutes,
+                hours: Math.floor(minutes / 60),
+                remainingMinutes: minutes % 60,
+                percentage: totalMinutes ? ((minutes / totalMinutes) * 100).toFixed(1) : 0
+            };
+        }
+
+        // Kategorizálatlan projektek
+        for (const [prefix, minutes] of Object.entries(uncategorizedTimes)) {
+            result.uncategorized[prefix] = {
+                minutes: minutes,
+                hours: Math.floor(minutes / 60),
+                remainingMinutes: minutes % 60,
+                percentage: totalMinutes ? ((minutes / totalMinutes) * 100).toFixed(1) : 0
+            };
+        }
+
+        return result;
+    }
+
+    // Beállítások modal létrehozása
+    function createSettingsModal() {
+        const modal = document.createElement('div');
+        modal.className = 'settings-modal';
+        modal.innerHTML = `
+            <h3>Projekt Beállítások</h3>
+            <div id="project-mappings"></div>
+            <div class="buttons-container">
+                <button class="button" id="save-settings">Mentés</button>
+                <button class="button" id="reset-defaults">Alapértelmezettek</button>
+                <button class="button" id="close-settings">Bezárás</button>
+            </div>
+        `;
+
+        const overlay = document.createElement('div');
+        overlay.className = 'modal-overlay';
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(modal);
+
+        return { modal, overlay };
+    }
+
+    // Beállítások modal frissítése
+    function updateSettingsModal() {
+        const prefixes = collectProjectPrefixes();
+        const mappingsContainer = document.getElementById('project-mappings');
+        const mainProjects = Array.from(new Set(Object.values(projectMapping).filter(Boolean)));
+
+        mappingsContainer.innerHTML = prefixes.map(prefix => `
+            <div class="project-mapping">
+                <span>${prefix}</span>
+                <select data-prefix="${prefix}">
+                    <option value="">-- Nincs --</option>
+                    ${mainProjects.map(project => `
+                        <option value="${project}" ${projectMapping[prefix] === project ? 'selected' : ''}>
+                            ${project}
+                        </option>
+                    `).join('')}
+                </select>
+            </div>
+        `).join('');
+    }
+
+    // Panel összecsukása/kinyitása
+    function togglePanel() {
+        const panel = document.querySelector('.worktime-stats');
+        const toggleButton = document.getElementById('toggle-panel');
+        
+        isPanelCollapsed = !isPanelCollapsed;
+        
+        if (isPanelCollapsed) {
+            panel.classList.add('collapsed');
+            toggleButton.textContent = '▼';
+            toggleButton.title = 'Kinyitás';
+        } else {
+            panel.classList.remove('collapsed');
+            toggleButton.textContent = '▲';
+            toggleButton.title = 'Összecsukás';
+        }
+        
+        // Állapot mentése
+        GM_setValue('panelCollapsed', isPanelCollapsed);
     }
 
     // Statisztika panel létrehozása
     function createStatsPanel() {
         const panel = document.createElement('div');
         panel.className = 'worktime-stats';
+        if (isPanelCollapsed) {
+            panel.classList.add('collapsed');
+        }
+        
         panel.innerHTML = `
-            <h3>Munkaidő Megoszlás</h3>
+            <h3>
+                Munkaidő Megoszlás
+                <button id="toggle-panel" class="toggle-button" title="${isPanelCollapsed ? 'Kinyitás' : 'Összecsukás'}">
+                    ${isPanelCollapsed ? '▼' : '▲'}
+                </button>
+            </h3>
             <div id="stats-content"></div>
-            <button class="refresh-btn">Frissítés</button>
+            <div class="buttons-container">
+                <button class="button settings" id="open-settings">Beállítások</button>
+                <button class="button">Frissítés</button>
+            </div>
         `;
 
         // Drag and drop funkcionalitás
@@ -154,7 +373,7 @@
         document.addEventListener('mouseup', dragEnd);
 
         function dragStart(e) {
-            if (e.target.classList.contains('refresh-btn')) return;
+            if (e.target.tagName.toLowerCase() === 'button') return;
 
             initialX = e.clientX - xOffset;
             initialY = e.clientY - yOffset;
@@ -176,10 +395,50 @@
             isDragging = false;
         }
 
-        // Frissítés gomb funkcionalitás
-        panel.querySelector('.refresh-btn').addEventListener('click', updateStats);
-
         document.body.appendChild(panel);
+
+        // Beállítások modal létrehozása
+        const { modal, overlay } = createSettingsModal();
+
+        // Event listeners
+        panel.querySelector('.button:not(.settings)').addEventListener('click', updateStats);
+        panel.querySelector('#open-settings').addEventListener('click', () => {
+            updateSettingsModal();
+            modal.classList.add('show');
+            overlay.classList.add('show');
+        });
+        
+        // Összecsukás/kinyitás gomb eseménykezelő
+        document.getElementById('toggle-panel').addEventListener('click', togglePanel);
+
+        document.getElementById('close-settings').addEventListener('click', () => {
+            modal.classList.remove('show');
+            overlay.classList.remove('show');
+        });
+
+        document.getElementById('save-settings').addEventListener('click', () => {
+            const newMapping = {};
+            document.querySelectorAll('.project-mapping select').forEach(select => {
+                const prefix = select.dataset.prefix;
+                const value = select.value;
+                if (value) {
+                    newMapping[prefix] = value;
+                }
+            });
+            projectMapping = newMapping;
+            GM_setValue('projectMapping', newMapping);
+            updateStats();
+            modal.classList.remove('show');
+            overlay.classList.remove('show');
+        });
+
+        document.getElementById('reset-defaults').addEventListener('click', () => {
+            projectMapping = {...defaultProjectMapping};
+            GM_setValue('projectMapping', projectMapping);
+            updateSettingsModal();
+            updateStats();
+        });
+
         updateStats();
     }
 
@@ -188,29 +447,55 @@
         const stats = calculateWorkTime();
         const content = document.getElementById('stats-content');
 
-        content.innerHTML = `
+        let html = '';
+
+        // Kategorizált projektek
+        html += Object.entries(stats.projects).map(([project, data]) => `
             <div class="stat-row">
-                <span>EFOP (IIER2ELES):</span>
-                <span>${stats.efop.hours}h ${stats.efop.remainingMinutes}m
-                    <span class="percentage">(${stats.efop.percentage}%)</span>
+                <span>${project}:</span>
+                <span>${data.hours}h ${data.remainingMinutes}m
+                    <span class="percentage">(${data.percentage}%)</span>
                 </span>
             </div>
-            <div class="stat-row">
-                <span>EKOZIG:</span>
-                <span>${stats.ekozig.hours}h ${stats.ekozig.remainingMinutes}m
-                    <span class="percentage">(${stats.ekozig.percentage}%)</span>
-                </span>
-            </div>
+        `).join('');
+
+        // Kategorizálatlan projektek
+        if (Object.keys(stats.uncategorized).length > 0) {
+            html += `<div class="uncategorized-section">
+                <h4>Kategorizálatlan projektek:</h4>
+                ${Object.entries(stats.uncategorized).map(([prefix, data]) => `
+                    <div class="stat-row">
+                        <span>${prefix}:</span>
+                        <span>${data.hours}h ${data.remainingMinutes}m
+                            <span class="percentage">(${data.percentage}%)</span>
+                        </span>
+                    </div>
+                `).join('')}
+            </div>`;
+        }
+
+        // Összesítés
+        html += `
             <div class="stat-row total">
                 <span>Összesen:</span>
                 <span>${stats.total.hours}h ${stats.total.remainingMinutes}m</span>
             </div>
-            ${Math.abs(stats.efop.percentage - 50) > 10 ?
-            `<div class="warning">⚠️ Az arány jelentősen eltér az 50-50%-tól!</div>` : ''}
         `;
+
+        content.innerHTML = html;
+
+        // Figyelmeztetés az 50-50%-os aránytól való eltérésre
+        const efopPercentage = parseFloat(stats.projects['EFOP']?.percentage || 0);
+        const ekozigPercentage = parseFloat(stats.projects['EKOZIG']?.percentage || 0);
+
+        if (Math.abs(efopPercentage - 50) > 10) {
+            content.innerHTML += `
+                <div class="warning">⚠️ Az arány jelentősen eltér az 50-50%-tól!</div>
+            `;
+        }
     }
 
-    // Várakozás a naptár betöltődésére és panel létrehozása
+    // Inicializálás
     function init() {
         const observer = new MutationObserver((mutations, obs) => {
             if (document.querySelector('.fc-view-harness')) {
@@ -239,5 +524,4 @@
 
     // Szkript inicializálása
     init();
-
 })();
