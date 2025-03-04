@@ -256,6 +256,8 @@
                 border: 1px solid #ddd;
                 border-radius: 5px;
                 overflow: hidden;
+                position: relative;
+                z-index: 1;
             }
             .month-header {
                 background-color: #f5f5f5;
@@ -281,6 +283,10 @@
                 padding: 5px;
                 border: 1px solid #eee;
                 position: relative;
+            }
+            .calendar-day:hover {
+                position: relative;
+                z-index: 101;
             }
             .calendar-day.empty {
                 background-color: #f9f9f9;
@@ -327,7 +333,7 @@
                 padding: 5px 10px;
                 border-radius: 3px;
                 font-size: 12px;
-                z-index: 100;
+                z-index: 200;
                 pointer-events: none;
                 opacity: 0;
                 transition: opacity 0.2s;
@@ -374,29 +380,17 @@
                 border: 1px solid #ddd;
                 border-radius: 5px;
                 padding: 10px;
-                z-index: 100; /* Növeljük a z-index értékét */
+                z-index: 100;
                 box-shadow: 0 2px 5px rgba(0,0,0,0.2);
                 min-width: 200px;
                 max-height: 300px;
                 overflow-y: auto;
             }
-
-           /* Új szabály a hónap végén lévő napokhoz */
             .calendar-day:nth-child(7n) .calendar-day-popup,
             .calendar-day:nth-child(7n-1) .calendar-day-popup,
             .calendar-day:nth-child(7n-2) .calendar-day-popup {
-              left: auto;
-              right: 100%;
-            }
-           /* Biztosítjuk, hogy a popup mindig látható legyen */
-           .month-calendar {
-             position: relative;
-             z-index: 1;
-            }
-           /* Amikor az egér a nap fölött van, növeljük a z-indexet */
-           .calendar-day:hover {
-             position: relative;
-             z-index: 101; /* Magasabb, mint a month-calendar z-indexe */
+                left: auto;
+                right: 100%;
             }
             .calendar-day:hover .calendar-day-popup {
                 display: block;
@@ -860,6 +854,7 @@
                 // Események konténer
                 const eventsContainer = document.createElement('div');
                 eventsContainer.className = 'calendar-day-events';
+
                 // Legfeljebb 3 eseményt jelenítünk meg közvetlenül
                 const visibleEvents = events.slice(0, 3);
 
@@ -903,6 +898,15 @@
                 if (events.length > 0) {
                     const popup = document.createElement('div');
                     popup.className = 'calendar-day-popup';
+
+                    // Ellenőrizzük a nap pozícióját a hétben (1-7)
+                    const dayPosition = (firstDayOfWeek - 1 + day - 1) % 7 + 1;
+
+                    // Ha a hét utolsó 3 napjáról van szó, jobbra igazítjuk a popupot
+                    if (dayPosition >= 5) {
+                        popup.style.left = 'auto';
+                        popup.style.right = '100%';
+                    }
 
                     const popupHeader = document.createElement('div');
                     popupHeader.style.fontWeight = 'bold';
