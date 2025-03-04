@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JIRA IIER2ELES Kitelepítés Összesítő
 // @namespace    http://tampermonkey.net/
-// @version      1.8
+// @version      2.0
 // @description  Kigyűjti és megjeleníti a kitelepítési információkat az IIER2ELES JIRA kommentekből az új környezetekre
 // @match        https://jira.ulyssys.hu/browse/IIER2ELES-*
 // @grant        none
@@ -211,6 +211,8 @@
                 max-width: 1200px;
                 max-height: 80vh;
                 overflow-y: auto;
+                display: flex;
+                flex-direction: column;
             }
             .timeline-close {
                 color: #aaa;
@@ -234,50 +236,54 @@
             .timeline-container {
                 position: relative;
                 margin-top: 30px;
-                padding-bottom: 30px;
-                overflow-x: auto;
-                min-height: 200px;
+                display: flex;
+                flex-direction: row;
+                height: 600px;
+                overflow-y: auto;
             }
             .timeline-inner {
                 position: relative;
+                width: 100%;
                 height: 100%;
-                min-width: 100%;
+                display: flex;
             }
             .timeline-line {
                 position: absolute;
+                left: 100px;
                 top: 0;
-                left: 0;
-                width: 100%;
-                height: 2px;
+                width: 2px;
+                height: 100%;
                 background-color: #ddd;
             }
             .timeline-item {
                 position: absolute;
-                transform: translate(-50%, 0);
+                left: 100px;
+                transform: translateX(-50%);
                 cursor: pointer;
                 z-index: 5;
+                display: flex;
+                align-items: center;
             }
             .timeline-dot {
                 width: 12px;
                 height: 12px;
                 border-radius: 50%;
-                margin: 0 auto;
+                margin-right: 10px;
             }
             .timeline-label {
-                margin-top: 5px;
-                font-size: 11px;
+                font-size: 12px;
                 white-space: nowrap;
-                text-align: center;
-                transform: rotate(-45deg);
-                transform-origin: left top;
-                margin-left: 10px;
-                margin-top: 15px;
+                background-color: rgba(255, 255, 255, 0.8);
+                padding: 2px 6px;
+                border-radius: 3px;
+                border: 1px solid #ddd;
+                margin-left: 5px;
             }
             .timeline-env {
                 font-weight: bold;
             }
             .timeline-date {
-                font-size: 10px;
+                font-size: 11px;
             }
             .timeline-legend {
                 display: flex;
@@ -334,24 +340,31 @@
             }
             .timeline-date-markers {
                 position: absolute;
-                top: -25px;
                 left: 0;
-                width: 100%;
-                height: 20px;
+                top: 0;
+                height: 100%;
+                width: 100px;
+                border-right: 1px solid #eee;
+                background-color: #f9f9f9;
             }
             .timeline-date-marker {
                 position: absolute;
-                transform: translateX(-50%);
+                left: 0;
+                width: 100%;
+                padding: 2px 5px;
                 font-size: 10px;
                 color: #666;
+                border-top: 1px solid #eee;
+                background-color: #f9f9f9;
+                text-align: right;
             }
             .timeline-date-marker::after {
                 content: '';
                 position: absolute;
-                top: 15px;
-                left: 50%;
-                height: 5px;
-                width: 1px;
+                top: 50%;
+                right: -5px;
+                width: 5px;
+                height: 1px;
                 background-color: #ccc;
             }
             .timeline-navigation {
@@ -391,7 +404,8 @@
             }
             .timeline-cluster {
                 position: absolute;
-                transform: translate(-50%, 0);
+                left: 100px;
+                transform: translateX(-50%);
                 cursor: pointer;
                 z-index: 10;
             }
@@ -410,9 +424,8 @@
             .timeline-cluster-popup {
                 display: none;
                 position: absolute;
-                top: 25px;
-                left: 50%;
-                transform: translateX(-50%);
+                left: 30px;
+                top: 0;
                 background-color: white;
                 border: 1px solid #ddd;
                 border-radius: 5px;
@@ -469,18 +482,11 @@
                 border: 1px solid #ddd;
                 border-radius: 3px;
             }
-            /* Új stílusok a jobb olvashatóságért */
-            .high-zoom .timeline-label {
-                transform: rotate(0deg);
-                margin-left: 0;
-                margin-top: 5px;
-                background-color: rgba(255, 255, 255, 0.8);
-                padding: 2px 4px;
-                border-radius: 3px;
-                border: 1px solid #ddd;
-            }
-            .high-zoom .timeline-item {
-                min-width: 80px;
+            .timeline-content-area {
+                margin-left: 100px;
+                position: relative;
+                flex-grow: 1;
+                height: 100%;
             }
         `;
         content.appendChild(style);
@@ -710,8 +716,8 @@
         const scaleSlider = document.createElement('input');
         scaleSlider.type = 'range';
         scaleSlider.min = '1';
-        scaleSlider.max = '30';  // Megnövelt nagyítási tartomány
-        scaleSlider.value = '10'; // Alapértelmezetten nagyobb nagyítás
+        scaleSlider.max = '10';
+        scaleSlider.value = '5';
         scaleSlider.className = 'timeline-scale-slider';
         scaleSlider.id = 'timelineScale';
         scaleControl.appendChild(scaleSlider);
@@ -754,14 +760,17 @@
         timelineContainer.className = 'timeline-container';
         timelineContainer.id = 'timelineContainer';
 
-        const timelineInner = document.createElement('div');
-        timelineInner.className = 'timeline-inner';
-        timelineInner.id = 'timelineInner';
-
         const dateMarkers = document.createElement('div');
         dateMarkers.className = 'timeline-date-markers';
         dateMarkers.id = 'timelineDateMarkers';
-        timelineInner.appendChild(dateMarkers);
+        timelineContainer.appendChild(dateMarkers);
+
+        const timelineContentArea = document.createElement('div');
+        timelineContentArea.className = 'timeline-content-area';
+
+        const timelineInner = document.createElement('div');
+        timelineInner.className = 'timeline-inner';
+        timelineInner.id = 'timelineInner';
 
         const timelineLine = document.createElement('div');
         timelineLine.className = 'timeline-line';
@@ -772,7 +781,8 @@
         timelineTooltip.id = 'timelineTooltip';
         timelineInner.appendChild(timelineTooltip);
 
-        timelineContainer.appendChild(timelineInner);
+        timelineContentArea.appendChild(timelineInner);
+        timelineContainer.appendChild(timelineContentArea);
         modalContent.appendChild(timelineContainer);
 
         timelineModal.appendChild(modalContent);
@@ -838,6 +848,7 @@
 
             nextButton.addEventListener('click', function() {
                 navigateTimeline('next');
+
             });
 
             // Szűrők eseménykezelői
@@ -890,7 +901,7 @@
                     });
 
                     // Beállítjuk a nagyítást az időtartam alapján
-                    scaleSlider.value = 15; // Alapértelmezetten nagyobb nagyítás
+                    scaleSlider.value = 5; // Alapértelmezett nagyítás
 
                     renderTimelineWithDates(startDate, endDate, parseInt(scaleSlider.value));
                 }
@@ -905,7 +916,7 @@
     let currentTimelineStart = null;
     let currentTimelineEnd = null;
     let currentZoom = 'month';
-    let currentScale = 10;
+    let currentScale = 5;
 
     function autoFitTimeline(deployments) {
         // Összegyűjtjük az összes dátumot minden környezetből
@@ -980,15 +991,7 @@
 
         // Beállítjuk a nagyítást az időtartam és a pontok száma alapján
         const scaleSlider = document.getElementById('timelineScale');
-
-        // Alapértelmezetten nagyobb nagyítást használunk
-        if (allDeployments.length < 10) {
-            scaleSlider.value = 20;
-        } else if (allDeployments.length < 30) {
-            scaleSlider.value = 15;
-        } else {
-            scaleSlider.value = 10;
-        }
+        scaleSlider.value = 5; // Alapértelmezett nagyítás
 
         // Beállítjuk az időtartományt és újrarajzoljuk az idővonalat
         currentTimelineStart = startDate;
@@ -1059,7 +1062,7 @@
 
     function renderTimeline(deployments, zoomLevel, scale) {
         currentZoom = zoomLevel;
-        currentScale = scale || 10;
+        currentScale = scale || 5;
 
         // Összegyűjtjük az összes dátumot minden környezetből
         let allDeployments = [];
@@ -1149,13 +1152,25 @@
         const dateMarkers = document.getElementById('timelineDateMarkers');
 
         // Töröljük a korábbi idővonal elemeket
-        const existingItems = inner.querySelectorAll('.timeline-item, .timeline-cluster');
-        existingItems.forEach(item => item.remove());
+        while (inner.firstChild) {
+            inner.removeChild(inner.firstChild);
+        }
 
         // Töröljük a korábbi dátum markereket
         while (dateMarkers.firstChild) {
             dateMarkers.removeChild(dateMarkers.firstChild);
         }
+
+        // Hozzáadjuk a timeline vonalat
+        const timelineLine = document.createElement('div');
+        timelineLine.className = 'timeline-line';
+        inner.appendChild(timelineLine);
+
+        // Hozzáadjuk a tooltip-et
+        const timelineTooltip = document.createElement('div');
+        timelineTooltip.className = 'timeline-tooltip';
+        timelineTooltip.id = 'timelineTooltip';
+        inner.appendChild(timelineTooltip);
 
         // Összegyűjtjük az összes dátumot minden környezetből
         let allDeployments = [];
@@ -1195,63 +1210,115 @@
             message.style.marginTop = '50px';
             message.textContent = 'Nincs megjeleníthető kitelepítés ebben az időszakban.';
 
-            inner.innerHTML = '';
             inner.appendChild(message);
             return;
-        }
-
-        // Beállítjuk az idővonal szélességét a nagyítás alapján
-        const baseWidth = container.clientWidth;
-        // Exponenciális nagyítás a jobb skálázáshoz
-        const scaledWidth = baseWidth * Math.pow(1.2, scale - 1);
-        inner.style.width = `${scaledWidth}px`;
-
-        // Nagyobb nagyításnál speciális osztály hozzáadása a jobb olvashatóságért
-        if (scale >= 15) {
-            inner.classList.add('high-zoom');
-        } else {
-            inner.classList.remove('high-zoom');
         }
 
         // Időtartam milliszekundumban
         const timeRange = endDate - startDate;
 
         // Dátum markerek hozzáadása
-        addDateMarkers(startDate, endDate, dateMarkers, scaledWidth);
+        addDateMarkers(startDate, endDate, dateMarkers, container.clientHeight);
 
-        // Klaszterezési küszöbérték a nagyítás alapján
-        // Minél nagyobb a nagyítás, annál kisebb a küszöbérték (kevesebb klaszterezés)
-        // A scale 1-30 között van, ahol 30 a legnagyobb nagyítás
-        const baseClusterThreshold = timeRange / scaledWidth * 20; // 20 pixel távolságon belüli pontok klaszterezése alapértelmezetten
+        // Használjuk a DBSCAN algoritmust a klaszterezéshez
+        // Ez egy sűrűség alapú klaszterezési algoritmus, amely jól működik időbeli adatokkal
+        const clusters = dbscanClustering(allDeployments, startDate, endDate, scale);
 
-        // Exponenciális csökkenés a klaszterezési küszöbértékben a nagyítás növekedésével
-        const clusterThreshold = baseClusterThreshold * Math.pow(0.85, scale - 1);
-
-        // Ha a nagyítás elég nagy (15 felett), akkor egyáltalán nem klaszterezünk
-        if (scale >= 15) {
-            // Egyedi pontok megjelenítése klaszterezés nélkül
-            allDeployments.forEach(deployment => {
-                addTimelineItem(deployment, startDate, endDate, scaledWidth, inner, tooltip);
-            });
-        } else {
-            // Klaszterezés a beállított küszöbérték alapján
-            const clusters = clusterDeployments(allDeployments, startDate, endDate, scaledWidth, clusterThreshold);
-
-            // Klaszterek és egyedi pontok megjelenítése
-            clusters.forEach(cluster => {
-                if (cluster.items.length === 1) {
-                    // Egyedi pont
-                    const deployment = cluster.items[0];
-                    addTimelineItem(deployment, startDate, endDate, scaledWidth, inner, tooltip);
-                } else {
-                    // Klaszter
-                    addTimelineCluster(cluster, startDate, endDate, scaledWidth, inner, tooltip);
-                }
-            });
-        }
+        // Klaszterek és egyedi pontok megjelenítése
+        clusters.forEach(cluster => {
+            if (cluster.length === 1) {
+                // Egyedi pont
+                const deployment = cluster[0];
+                addTimelineItem(deployment, startDate, endDate, container.clientHeight, inner, tooltip);
+            } else {
+                // Klaszter
+                addTimelineCluster(cluster, startDate, endDate, container.clientHeight, inner, tooltip);
+            }
+        });
     }
 
-    function addDateMarkers(startDate, endDate, container, width) {
+    // DBSCAN klaszterezési algoritmus implementációja
+    function dbscanClustering(deployments, startDate, endDate, scale) {
+        if (deployments.length === 0) return [];
+
+        const timeRange = endDate - startDate;
+
+        // Epsilon érték (a pontok közötti maximális távolság, hogy egy klaszterbe kerüljenek)
+        // Ezt a nagyítás alapján számoljuk, hogy nagyobb nagyításnál kisebb legyen
+        const epsilon = timeRange / (100 * scale); // Nagyobb scale = kisebb epsilon = kevesebb klaszterezés
+
+        // MinPts érték (a minimális pontok száma egy klaszterben)
+        const minPts = 2;
+
+        // Pontok távolságának kiszámítása (időbeli távolság)
+        function distance(a, b) {
+            return Math.abs(a.date - b.date);
+        }
+
+        // Szomszédos pontok keresése
+        function getNeighbors(point, points) {
+            return points.filter(p => distance(point, p) <= epsilon);
+        }
+
+        // DBSCAN algoritmus
+        const visited = new Set();
+        const clusters = [];
+        let currentCluster = [];
+
+        // Minden pontra
+        for (let i = 0; i < deployments.length; i++) {
+            const point = deployments[i];
+            const pointId = point.commentId;
+
+            // Ha már látogattuk, folytatjuk
+            if (visited.has(pointId)) continue;
+
+            // Megjelöljük látogatottként
+            visited.add(pointId);
+
+            // Megkeressük a szomszédokat
+            const neighbors = getNeighbors(point, deployments);
+
+            // Ha nincs elég szomszéd, zajnak tekintjük (egyedi pont)
+            if (neighbors.length < minPts) {
+                clusters.push([point]);
+                continue;
+            }
+
+            // Új klaszter kezdése
+            currentCluster = [point];
+
+            // Szomszédok feldolgozása
+            for (let j = 0; j < neighbors.length; j++) {
+                const neighbor = neighbors[j];
+                const neighborId = neighbor.commentId;
+
+                // Ha már látogattuk, folytatjuk
+                if (visited.has(neighborId)) continue;
+
+                // Megjelöljük látogatottként
+                visited.add(neighborId);
+
+                // Hozzáadjuk a klaszterhez
+                currentCluster.push(neighbor);
+
+                // Megkeressük a szomszéd szomszédait
+                const neighborNeighbors = getNeighbors(neighbor, deployments);
+
+                // Ha elég szomszédja van, hozzáadjuk őket a feldolgozandó szomszédokhoz
+                if (neighborNeighbors.length >= minPts) {
+                    neighbors.push(...neighborNeighbors.filter(n => !visited.has(n.commentId)));
+                }
+            }
+
+            // Hozzáadjuk a klasztert a klaszterek listájához
+            clusters.push(currentCluster);
+        }
+
+        return clusters;
+    }
+
+    function addDateMarkers(startDate, endDate, container, height) {
         const timeRange = endDate - startDate;
 
         // Meghatározzuk a marker típusát az időtartam alapján
@@ -1288,11 +1355,11 @@
         // Markerek hozzáadása
         let currentDate = new Date(startDate);
         while (currentDate <= endDate) {
-            const position = ((currentDate - startDate) / timeRange) * width;
+            const position = ((currentDate - startDate) / timeRange) * height;
 
             const marker = document.createElement('div');
             marker.className = 'timeline-date-marker';
-            marker.style.left = `${position}px`;
+            marker.style.top = `${position}px`;
             marker.textContent = formatFunc(currentDate);
 
             container.appendChild(marker);
@@ -1302,60 +1369,13 @@
         }
     }
 
-    function clusterDeployments(deployments, startDate, endDate, width, threshold) {
-        if (deployments.length === 0) return [];
-
+    function addTimelineItem(deployment, startDate, endDate, height, container, tooltip) {
         const timeRange = endDate - startDate;
-        const clusters = [];
-        let currentCluster = null;
-
-        // Rendezzük a telepítéseket időrend szerint
-        deployments.sort((a, b) => a.date - b.date);
-
-        deployments.forEach(deployment => {
-            const position = ((deployment.date - startDate) / timeRange) * width;
-
-            if (!currentCluster) {
-                // Új klaszter létrehozása
-                currentCluster = {
-                    position: position,
-                    items: [deployment]
-                };
-            } else {
-                const lastPosition = currentCluster.position;
-
-                if (Math.abs(position - lastPosition) <= threshold) {
-                    // Hozzáadjuk a meglévő klaszterhez
-                    currentCluster.items.push(deployment);
-                    // Frissítjük a klaszter pozícióját (átlag)
-                    currentCluster.position = (lastPosition * (currentCluster.items.length - 1) + position) / currentCluster.items.length;
-                } else {
-                    // Lezárjuk a jelenlegi klasztert és újat kezdünk
-                    clusters.push(currentCluster);
-                    currentCluster = {
-                        position: position,
-                        items: [deployment]
-                    };
-                }
-            }
-        });
-
-        // Az utolsó klasztert is hozzáadjuk
-        if (currentCluster) {
-            clusters.push(currentCluster);
-        }
-
-        return clusters;
-    }
-
-    function addTimelineItem(deployment, startDate, endDate, width, container, tooltip) {
-        const timeRange = endDate - startDate;
-        const position = ((deployment.date - startDate) / timeRange) * width;
+        const position = ((deployment.date - startDate) / timeRange) * height;
 
         const item = document.createElement('div');
         item.className = 'timeline-item';
-        item.style.left = `${position}px`;
-        item.style.top = '0';
+        item.style.top = `${position}px`;
         item.setAttribute('data-comment-id', deployment.commentId);
         item.setAttribute('data-date', deployment.date.toISOString());
         item.setAttribute('data-env', deployment.env);
@@ -1411,26 +1431,30 @@
         });
     }
 
-    function addTimelineCluster(cluster, startDate, endDate, width, container, tooltip) {
+    function addTimelineCluster(cluster, startDate, endDate, height, container, tooltip) {
+        // Kiszámoljuk a klaszter középpontját (átlagos időpont)
+        const clusterDate = new Date(
+            cluster.reduce((sum, item) => sum + item.date.getTime(), 0) / cluster.length
+        );
+
         const timeRange = endDate - startDate;
-        const position = cluster.position;
+        const position = ((clusterDate - startDate) / timeRange) * height;
 
         const clusterElement = document.createElement('div');
         clusterElement.className = 'timeline-cluster';
-        clusterElement.style.left = `${position}px`;
-        clusterElement.style.top = '0';
+        clusterElement.style.top = `${position}px`;
 
         const dot = document.createElement('div');
         dot.className = 'timeline-cluster-dot';
-        dot.textContent = cluster.items.length;
+        dot.textContent = cluster.length;
 
         const popup = document.createElement('div');
         popup.className = 'timeline-cluster-popup';
 
         // Rendezzük a klaszter elemeit időrend szerint (legújabb elöl)
-        cluster.items.sort((a, b) => b.date - a.date);
+        cluster.sort((a, b) => b.date - a.date);
 
-        cluster.items.forEach(deployment => {
+        cluster.forEach(deployment => {
             const item = document.createElement('div');
             item.className = 'cluster-item';
             item.setAttribute('data-comment-id', deployment.commentId);
@@ -1471,7 +1495,7 @@
 
         // Tooltip megjelenítése hover esetén
         clusterElement.addEventListener('mouseenter', function(e) {
-            tooltip.innerHTML = `<strong>${cluster.items.length} kitelepítés</strong>`;
+            tooltip.innerHTML = `<strong>${cluster.length} kitelepítés</strong>`;
 
             const rect = container.getBoundingClientRect();
             tooltip.style.left = `${e.clientX - rect.left}px`;
