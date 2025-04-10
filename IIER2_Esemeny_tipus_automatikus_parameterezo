@@ -1,0 +1,823 @@
+// ==UserScript==
+// @name         IIER2 Automatikus eseménytípus felvétel
+// @namespace    http://tampermonkey.net/
+// @version      2.2
+// @description  Automatikusan felveszi az összes eseménytípust a megadott értékekkel az IIER2 rendszerben
+// @author       You
+// @match        http://iier2-konfig.alig.hu:8080/xhtml/jogcimkezeles/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // Stílusok a gombokhoz és a státusz panelhez
+    const style = document.createElement('style');
+    style.textContent = `
+        .auto-fill-button {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            z-index: 10000;
+            padding: 10px 15px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .auto-fill-button:hover {
+            background-color: #45a049;
+        }
+        .stop-button {
+            position: fixed;
+            top: 10px;
+            right: 190px;
+            z-index: 10000;
+            padding: 10px 15px;
+            background-color: #f44336;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            display: none;
+        }
+        .stop-button:hover {
+            background-color: #d32f2f;
+        }
+        .auto-fill-status {
+            position: fixed;
+            top: 50px;
+            right: 10px;
+            z-index: 10000;
+            padding: 5px 10px;
+            background-color: #f8f8f8;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 12px;
+            max-width: 400px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+    `;
+    document.head.appendChild(style);
+
+    // Gombok létrehozása
+    const startButton = document.createElement('button');
+    startButton.textContent = 'Összes eseménytípus felvétele';
+    startButton.className = 'auto-fill-button';
+    document.body.appendChild(startButton);
+
+    const stopButton = document.createElement('button');
+    stopButton.textContent = 'Folyamat leállítása';
+    stopButton.className = 'stop-button';
+    document.body.appendChild(stopButton);
+
+    // Státusz panel létrehozása
+    const statusPanel = document.createElement('div');
+    statusPanel.className = 'auto-fill-status';
+    statusPanel.style.display = 'none';
+    document.body.appendChild(statusPanel);
+
+    // Globális változók
+    let isProcessRunning = false;
+    let shouldStop = false;
+    let currentEventTypeIndex = 0;
+    let processedEventTypes = [];
+    let timeoutIds = []; // Az összes időzítő tárolása
+
+    // Konstansok a kitöltendő mezőkhöz
+    const FIELDS_CONFIG = {
+        eventTypeSelectId: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:asyncEventTypeHivatkozasiNev_input',
+        eventTypeSelectInputId: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:asyncEventTypeHivatkozasiNev_input_input',
+        textInputs: [
+            {
+                id: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:eventConfig_retryCount_input_input',
+                hiddenId: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:eventConfig_retryCount_input_hinput',
+                value: '10',
+                label: 'Újrapróbálkozások száma'
+            },
+            {
+                id: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:eventConfig_retryInterval_input_input',
+                hiddenId: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:eventConfig_retryInterval_input_hinput',
+                value: '600',
+                label: 'Újrapróbálkozások közti idő'
+            },
+            {
+                id: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:eventConfig_priority_input_input',
+                hiddenId: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:eventConfig_priority_input_hinput',
+                value: '50',
+                label: 'Prioritás'
+            },
+            {
+                id: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:eventConfig_threadTimeout_input_input',
+                hiddenId: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:eventConfig_threadTimeout_input_hinput',
+                value: '900',
+                label: 'Futások maximális ideje'
+            }
+        ],
+        dropdowns: [
+            {
+                id: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:eventConfig_priorityCategory_input',
+                value: 'NORMAL',
+                label: 'Prioritás kategória'
+            },
+            {
+                id: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:eventConfig_nodeDomain_input',
+                value: 'GINOP_TELJES',
+                label: 'Domain'
+            }
+        ],
+        buttons: {
+            save: 'j_idt77:j_idt79_save',
+            newEntry: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:j_id423'
+        },
+        loadingPopup: {
+            className: 'ui-dialog-content ui-widget-content',
+            textContent: 'Türelmet kérünk'
+        }
+    };
+
+    // Gomb eseménykezelők
+    startButton.addEventListener('click', startAutomatedProcess);
+    stopButton.addEventListener('click', stopAutomatedProcess);
+
+    // Saját setTimeout függvény, amely nyilvántartja az időzítőket
+    function safeSetTimeout(callback, delay) {
+        const timeoutId = setTimeout(() => {
+            // Ha a folyamat még fut, akkor futtatjuk a callback-et
+            if (isProcessRunning && !shouldStop) {
+                callback();
+            }
+            // Eltávolítjuk az időzítőt a listából
+            const index = timeoutIds.indexOf(timeoutId);
+            if (index > -1) {
+                timeoutIds.splice(index, 1);
+            }
+        }, delay);
+        
+        // Hozzáadjuk az időzítőt a listához
+        timeoutIds.push(timeoutId);
+        
+        return timeoutId;
+    }
+
+    // Folyamat indítása
+    function startAutomatedProcess() {
+        if (isProcessRunning) return;
+        
+        isProcessRunning = true;
+        shouldStop = false;
+        startButton.style.display = 'none';
+        stopButton.style.display = 'block';
+        statusPanel.style.display = 'block';
+        
+        updateStatus('Automatikus folyamat indítása...');
+        
+        // Eseménytípusok lekérése
+        const eventTypes = getAvailableEventTypes();
+        if (!eventTypes || eventTypes.length === 0) {
+            updateStatus('Nem találhatók eseménytípusok!', true);
+            endProcess();
+            return;
+        }
+        
+        // Már felvett eseménytípusok ellenőrzése
+        const existingEventTypes = getExistingEventTypes();
+        updateStatus(`Talált eseménytípusok: ${eventTypes.length}<br>Már felvett eseménytípusok: ${existingEventTypes.length}`);
+        
+        // Kiszűrjük a már felvett eseménytípusokat
+        const eventTypesToProcess = eventTypes.filter(type => !existingEventTypes.includes(type));
+        
+        if (eventTypesToProcess.length === 0) {
+            updateStatus('Minden eseménytípus már fel van véve!');
+            endProcess();
+            return;
+        }
+        
+        updateStatus(`Feldolgozandó eseménytípusok: ${eventTypesToProcess.length}<br>${eventTypesToProcess.join(', ')}`);
+        
+        // Folyamat indítása
+        processedEventTypes = [];
+        currentEventTypeIndex = 0;
+        processNextEventType(eventTypesToProcess);
+    }
+
+    // Folyamat azonnali leállítása
+    function stopAutomatedProcess() {
+        updateStatus('Folyamat azonnali leállítása...');
+        shouldStop = true;
+        isProcessRunning = false;
+        
+        // Minden időzítő törlése
+        timeoutIds.forEach(id => clearTimeout(id));
+        timeoutIds = [];
+        
+        endProcess();
+    }
+
+    // Folyamat befejezése
+    function endProcess() {
+        isProcessRunning = false;
+        startButton.style.display = 'block';
+        stopButton.style.display = 'none';
+        
+        if (shouldStop) {
+            updateStatus(`Folyamat leállítva. Feldolgozott eseménytípusok: ${processedEventTypes.length}<br>${processedEventTypes.join(', ')}`);
+        } else {
+            updateStatus(`Folyamat sikeresen befejezve. Feldolgozott eseménytípusok: ${processedEventTypes.length}<br>${processedEventTypes.join(', ')}`);
+        }
+        
+        // 10 másodperc múlva elrejtjük a státusz panelt
+        safeSetTimeout(() => {
+            statusPanel.style.display = 'none';
+        }, 10000);
+    }
+
+    // Következő eseménytípus feldolgozása
+    function processNextEventType(eventTypes) {
+        if (shouldStop || !isProcessRunning || currentEventTypeIndex >= eventTypes.length) {
+            endProcess();
+            return;
+        }
+        
+        const currentEventType = eventTypes[currentEventTypeIndex];
+        updateStatus(`Feldolgozás: ${currentEventType} (${currentEventTypeIndex + 1}/${eventTypes.length})`);
+        
+        // Új felvitel gombra kattintás (ha nem az első elem)
+        if (currentEventTypeIndex > 0) {
+            clickNewEntryButton(() => {
+                safeSetTimeout(() => {
+                    fillEventType(currentEventType, eventTypes);
+                }, 1000);
+            });
+        } else {
+            fillEventType(currentEventType, eventTypes);
+        }
+    }
+
+    // Eseménytípus kiválasztása és mezők kitöltése
+    function fillEventType(eventType, allEventTypes) {
+        if (shouldStop || !isProcessRunning) {
+            endProcess();
+            return;
+        }
+        
+        // Eseménytípus kiválasztása
+        selectEventType(eventType, () => {
+            // Szöveges mezők kitöltése
+            fillTextInputs(0, () => {
+                // Legördülő menük kitöltése
+                fillDropdowns(0, () => {
+                    // Ellenőrzés
+                    verifyAllFields(() => {
+                        // Mentés
+                        clickSaveButton(() => {
+                            // Következő eseménytípus
+                            processedEventTypes.push(eventType);
+                            currentEventTypeIndex++;
+                            safeSetTimeout(() => {
+                                processNextEventType(allEventTypes);
+                            }, 1000);
+                        });
+                    });
+                });
+            });
+        });
+    }
+
+    // Eseménytípus kiválasztása
+    function selectEventType(eventType, callback) {
+        if (shouldStop || !isProcessRunning) {
+            endProcess();
+            return;
+        }
+        
+        try {
+            const selectElement = document.getElementById(FIELDS_CONFIG.eventTypeSelectId);
+            if (!selectElement) {
+                updateStatus(`Eseménytípus legördülő menü nem található!`, true);
+                if (callback) callback();
+                return;
+            }
+            
+            updateStatus(`Eseménytípus kiválasztása: ${eventType}`);
+            
+            // Kattintás a legördülő menüre
+            selectElement.click();
+            
+            // Várunk egy kicsit, hogy megjelenjen a legördülő lista
+            safeSetTimeout(() => {
+                if (shouldStop || !isProcessRunning) {
+                    endProcess();
+                    return;
+                }
+                
+                try {
+                    // Keressük meg a megfelelő elemet a listában
+                    const items = document.querySelectorAll(`li[data-label="${eventType}"]`);
+                    if (items.length > 0) {
+                        // Kattintás az elemre
+                        items[0].click();
+                        
+                        // Ellenőrizzük, hogy a címke frissült-e
+                        safeSetTimeout(() => {
+                            if (shouldStop || !isProcessRunning) {
+                                endProcess();
+                                return;
+                            }
+                            
+                            const label = document.getElementById(`${FIELDS_CONFIG.eventTypeSelectId}_label`);
+                            if (label && label.textContent.trim() !== eventType) {
+                                updateStatus(`Az eseménytípus címkéje nem frissült. Közvetlen beállítás...`, true);
+                                
+                                // Közvetlen beállítás
+                                if (label) {
+                                    label.textContent = eventType;
+                                }
+                                
+                                const hiddenSelect = document.getElementById(FIELDS_CONFIG.eventTypeSelectInputId);
+                                if (hiddenSelect) {
+                                    hiddenSelect.value = eventType;
+                                    triggerEvent(hiddenSelect, 'change');
+                                }
+                            }
+                            
+                            if (callback) callback();
+                        }, 300);
+                    } else {
+                        updateStatus(`Nem található elem a legördülő menüben: ${eventType}`, true);
+                        
+                        // Közvetlen beállítás
+                        const hiddenSelect = document.getElementById(FIELDS_CONFIG.eventTypeSelectInputId);
+                        if (hiddenSelect) {
+                            hiddenSelect.value = eventType;
+                            triggerEvent(hiddenSelect, 'change');
+                        }
+                        
+                        const label = document.getElementById(`${FIELDS_CONFIG.eventTypeSelectId}_label`);
+                        if (label) {
+                            label.textContent = eventType;
+                        }
+                        
+                        if (callback) callback();
+                    }
+                } catch (innerError) {
+                    updateStatus(`Hiba az eseménytípus elem kiválasztása közben: ${innerError.message}`, true);
+                    if (callback) callback();
+                }
+            }, 500);
+        } catch (error) {
+            updateStatus(`Hiba az eseménytípus kiválasztása közben: ${error.message}`, true);
+            if (callback) callback();
+        }
+    }
+
+    // Szöveges mezők kitöltése
+    function fillTextInputs(index, callback) {
+        if (shouldStop || !isProcessRunning || index >= FIELDS_CONFIG.textInputs.length) {
+            if (shouldStop || !isProcessRunning) {
+                endProcess();
+                return;
+            }
+            
+            // Ha minden szöveges mező kitöltve, folytatjuk
+            if (callback) callback();
+            return;
+        }
+
+        const field = FIELDS_CONFIG.textInputs[index];
+        updateStatus(`${field.label} kitöltése (${index + 1}/${FIELDS_CONFIG.textInputs.length})...`);
+        
+        // Szöveges mező kitöltése
+        fillTextInput(field.id, field.hiddenId, field.value);
+        
+        // Következő mező kitöltése késleltetéssel
+        safeSetTimeout(() => {
+            fillTextInputs(index + 1, callback);
+        }, 300);
+    }
+
+    // Legördülő menük kitöltése
+    function fillDropdowns(index, callback) {
+        if (shouldStop || !isProcessRunning || index >= FIELDS_CONFIG.dropdowns.length) {
+            if (shouldStop || !isProcessRunning) {
+                endProcess();
+                return;
+            }
+            
+            // Ha minden legördülő menü kitöltve, folytatjuk
+            if (callback) callback();
+            return;
+        }
+
+        const field = FIELDS_CONFIG.dropdowns[index];
+        updateStatus(`${field.label} kiválasztása (${index + 1}/${FIELDS_CONFIG.dropdowns.length})...`);
+        
+        // Legördülő menü kiválasztása
+        selectDropdownValue(field.id, field.value);
+        
+        // Következő legördülő menü kitöltése késleltetéssel
+        safeSetTimeout(() => {
+            fillDropdowns(index + 1, callback);
+        }, 800); // Hosszabb késleltetés a legördülő menüknél
+    }
+
+    // Szöveges beviteli mező kitöltése
+    function fillTextInput(inputId, hiddenInputId, value) {
+        if (shouldStop || !isProcessRunning) {
+            endProcess();
+            return false;
+        }
+        
+        try {
+            const inputElement = document.getElementById(inputId);
+            if (!inputElement) {
+                updateStatus(`Beviteli mező nem található: ${inputId}`, true);
+                return false;
+            }
+            
+            // Fókusz a mezőre
+            inputElement.focus();
+            
+            // Érték beállítása
+            inputElement.value = value;
+            
+            // Események kiváltása
+            triggerEvent(inputElement, 'input');
+            triggerEvent(inputElement, 'change');
+            triggerEvent(inputElement, 'blur');
+            
+            // Rejtett input beállítása, ha létezik
+            if (hiddenInputId) {
+                const hiddenInput = document.getElementById(hiddenInputId);
+                if (hiddenInput) {
+                    hiddenInput.value = value;
+                }
+            }
+            
+            return true;
+        } catch (error) {
+            updateStatus(`Hiba a beviteli mező kitöltése közben (${inputId}): ${error.message}`, true);
+            return false;
+        }
+    }
+
+    // Legördülő menü kiválasztása
+    function selectDropdownValue(selectId, value) {
+        if (shouldStop || !isProcessRunning) {
+            endProcess();
+            return false;
+        }
+        
+        try {
+            // Legördülő menü megnyitása
+            const selectElement = document.getElementById(selectId);
+            if (!selectElement) {
+                updateStatus(`Legördülő menü nem található: ${selectId}`, true);
+                return false;
+            }
+            
+            // Kattintás a legördülő menüre
+            selectElement.click();
+            
+            // Várunk egy kicsit, hogy megjelenjen a legördülő lista
+            safeSetTimeout(() => {
+                if (shouldStop || !isProcessRunning) {
+                    endProcess();
+                    return;
+                }
+                
+                try {
+                    // Keressük meg a megfelelő elemet a listában
+                    const items = document.querySelectorAll(`li[data-label="${value}"]`);
+                    if (items.length > 0) {
+                        // Kattintás az elemre
+                        items[0].click();
+                        
+                        // Ellenőrizzük, hogy a címke frissült-e
+                        safeSetTimeout(() => {
+                            if (shouldStop || !isProcessRunning) {
+                                endProcess();
+                                return;
+                            }
+                            
+                            const label = document.getElementById(`${selectId}_label`);
+                            if (label && label.textContent.trim() !== value) {
+                                updateStatus(`A legördülő menü címkéje nem frissült. Közvetlen beállítás...`, true);
+                                
+                                // Közvetlen beállítás
+                                if (label) {
+                                    label.textContent = value;
+                                }
+                                
+                                const hiddenSelect = document.getElementById(`${selectId}_input`);
+                                if (hiddenSelect) {
+                                    hiddenSelect.value = value;
+                                    triggerEvent(hiddenSelect, 'change');
+                                }
+                            }
+                        }, 200);
+                        
+                        return true;
+                    } else {
+                        updateStatus(`Nem található elem a legördülő menüben: ${value}`, true);
+                        
+                        // Közvetlen beállítás
+                        const hiddenSelect = document.getElementById(`${selectId}_input`);
+                        if (hiddenSelect) {
+                            hiddenSelect.value = value;
+                            triggerEvent(hiddenSelect, 'change');
+                        }
+                        
+                        const label = document.getElementById(`${selectId}_label`);
+                        if (label) {
+                            label.textContent = value;
+                        }
+                        
+                        return false;
+                    }
+                } catch (innerError) {
+                    updateStatus(`Hiba a legördülő menü elem kiválasztása közben: ${innerError.message}`, true);
+                    return false;
+                }
+            }, 300);
+        } catch (error) {
+            updateStatus(`Hiba a legördülő menü kezelése közben (${selectId}): ${error.message}`, true);
+            return false;
+        }
+    }
+
+    // Események kiváltása
+    function triggerEvent(element, eventType) {
+        const event = new Event(eventType, { bubbles: true, cancelable: true });
+        element.dispatchEvent(event);
+    }
+
+    // Minden mező ellenőrzése
+    function verifyAllFields(callback) {
+        if (shouldStop || !isProcessRunning) {
+            endProcess();
+            return;
+        }
+        
+        let allFieldsCorrect = true;
+        let statusMessage = '<strong>Ellenőrzés eredménye:</strong><br>';
+        
+        // Szöveges mezők ellenőrzése
+        for (const field of FIELDS_CONFIG.textInputs) {
+            const element = document.getElementById(field.id);
+            if (!element) {
+                statusMessage += `❌ ${field.label} mező nem található<br>`;
+                allFieldsCorrect = false;
+                continue;
+            }
+            
+            if (element.value !== field.value) {
+                statusMessage += `❌ ${field.label} mező értéke nem megfelelő (${element.value} helyett ${field.value})<br>`;
+                
+                // Újra megpróbáljuk kitölteni
+                fillTextInput(field.id, field.hiddenId, field.value);
+                
+                allFieldsCorrect = false;
+            } else {
+                statusMessage += `✅ ${field.label}: ${field.value}<br>`;
+            }
+        }
+        
+        // Legördülő menük ellenőrzése
+        for (const field of FIELDS_CONFIG.dropdowns) {
+            const labelElement = document.getElementById(`${field.id}_label`);
+            if (!labelElement) {
+                statusMessage += `❌ ${field.label} címke nem található<br>`;
+                allFieldsCorrect = false;
+                continue;
+            }
+            
+            if (labelElement.textContent.trim() !== field.value) {
+                statusMessage += `❌ ${field.label} értéke nem megfelelő (${labelElement.textContent.trim()} helyett ${field.value})<br>`;
+                allFieldsCorrect = false;
+            } else {
+                statusMessage += `✅ ${field.label}: ${field.value}<br>`;
+            }
+        }
+        
+        if (allFieldsCorrect) {
+            statusMessage += '<strong>Minden mező sikeresen kitöltve! ✅</strong><br>';
+            updateStatus(statusMessage);
+            if (callback) callback();
+        } else {
+            statusMessage += '<strong>Nem minden mező lett megfelelően kitöltve. Újrapróbálkozás...</strong>';
+            updateStatus(statusMessage, true);
+            
+            // Újra megpróbáljuk a kitöltést
+            safeSetTimeout(() => {
+                if (shouldStop || !isProcessRunning) {
+                    endProcess();
+                    return;
+                }
+                
+                fillTextInputs(0, () => {
+                    fillDropdowns(0, () => {
+                        verifyAllFields(callback);
+                    });
+                });
+            }, 1000);
+        }
+    }
+
+    // Kattintás a mentés gombra
+    function clickSaveButton(callback) {
+        if (shouldStop || !isProcessRunning) {
+            endProcess();
+            return;
+        }
+        
+        const saveButton = document.getElementById(FIELDS_CONFIG.buttons.save);
+        if (!saveButton) {
+            updateStatus('Mentés gomb nem található!', true);
+            if (callback) callback();
+            return;
+        }
+        
+        updateStatus('Kattintás a mentés gombra...');
+        saveButton.click();
+        
+        // Várunk a "Türelmet kérünk" popup eltűnésére
+        waitForLoadingPopupToDisappear(callback);
+    }
+    
+    // Várakozás a "Türelmet kérünk" popup eltűnésére
+    function waitForLoadingPopupToDisappear(callback, maxWaitTime = 30000, checkInterval = 500) {
+        if (shouldStop || !isProcessRunning) {
+            endProcess();
+            return;
+        }
+        
+        updateStatus('Várakozás a "Türelmet kérünk" popup eltűnésére...');
+        
+        let waitStartTime = Date.now();
+        let checkCount = 0;
+        
+        function checkForLoadingPopup() {
+            if (shouldStop || !isProcessRunning) {
+                endProcess();
+                return;
+            }
+            
+            checkCount++;
+            const elapsedTime = Date.now() - waitStartTime;
+            
+            // Ellenőrizzük, hogy létezik-e a "Türelmet kérünk" popup
+            const loadingPopups = Array.from(document.querySelectorAll(`.${FIELDS_CONFIG.loadingPopup.className}`))
+                .filter(el => el.textContent.includes(FIELDS_CONFIG.loadingPopup.textContent));
+            
+            if (loadingPopups.length === 0) {
+                // Ha nincs popup, akkor folytathatjuk
+                updateStatus(`"Türelmet kérünk" popup eltűnt (${elapsedTime}ms után, ${checkCount} ellenőrzés után).`);
+                
+                // Várunk még egy kicsit, hogy biztosan befejeződjön a mentés
+                safeSetTimeout(() => {
+                    if (callback) callback();
+                }, 1000);
+            } else if (elapsedTime > maxWaitTime) {
+                // Ha túl sokáig vártunk, akkor folytatjuk
+                updateStatus(`Várakozási idő túllépve (${maxWaitTime}ms). Folytatás...`, true);
+                
+                if (callback) callback();
+            } else {
+                // Még mindig látható a popup, várunk még
+                updateStatus(`Várakozás a "Türelmet kérünk" popup eltűnésére... (${elapsedTime}ms, ${checkCount} ellenőrzés)`);
+                
+                safeSetTimeout(checkForLoadingPopup, checkInterval);
+            }
+        }
+        
+        // Indítjuk az ellenőrzést
+        safeSetTimeout(checkForLoadingPopup, 1000); // Várunk egy kicsit, hogy megjelenjen a popup
+    }
+    
+    // Kattintás az új felvitel gombra
+    function clickNewEntryButton(callback) {
+        if (shouldStop || !isProcessRunning) {
+            endProcess();
+            return;
+        }
+        
+        const newEntryButton = document.getElementById(FIELDS_CONFIG.buttons.newEntry);
+        if (!newEntryButton) {
+            updateStatus('Új felvitel gomb nem található!', true);
+            if (callback) callback();
+            return;
+        }
+        
+        updateStatus('Kattintás az új felvitel gombra...');
+        newEntryButton.click();
+        
+        // Várunk az új felvitel betöltésére
+        safeSetTimeout(() => {
+            if (callback) callback();
+        }, 1000);
+    }
+
+    // Státusz frissítése
+    function updateStatus(message, isError = false) {
+        statusPanel.style.display = 'block';
+        statusPanel.style.backgroundColor = isError ? '#ffebee' : '#f1f8e9';
+        statusPanel.style.borderColor = isError ? '#ffcdd2' : '#dcedc8';
+        statusPanel.innerHTML = message;
+        console.log(message.replace(/<br>/g, '\n').replace(/<[^>]*>/g, ''));
+    }
+
+    // Elérhető eseménytípusok lekérése
+    function getAvailableEventTypes() {
+        try {
+            const selectElement = document.getElementById(FIELDS_CONFIG.eventTypeSelectInputId);
+            if (!selectElement) return [];
+            
+            const options = Array.from(selectElement.options);
+            return options
+                .filter(option => option.value && option.value !== '&nbsp;')
+                .map(option => option.value);
+        } catch (error) {
+            console.error('Hiba az eseménytípusok lekérése közben:', error);
+            return [];
+        }
+    }
+
+    // Már felvett eseménytípusok lekérése a táblázatból
+    function getExistingEventTypes() {
+        try {
+            const rows = document.querySelectorAll('tr[data-ri]');
+            const existingTypes = [];
+            
+            rows.forEach(row => {
+                // A harmadik cella tartalmazza az eseménytípust
+                const cells = row.querySelectorAll('td');
+                if (cells.length >= 3) {
+                    const eventType = cells[2].textContent.trim();
+                    if (eventType) {
+                        existingTypes.push(eventType);
+                    }
+                }
+            });
+            
+            return existingTypes;
+        } catch (error) {
+            console.error('Hiba a meglévő eseménytípusok lekérése közben:', error);
+            return [];
+        }
+    }
+
+    // Mutációs megfigyelő a DOM változásainak követésére
+    function setupMutationObserver() {
+        // Figyeljük a szöveges mezők értékeinek változását
+        for (const field of FIELDS_CONFIG.textInputs) {
+            const inputElement = document.getElementById(field.id);
+            if (inputElement) {
+                inputElement.addEventListener('change', function(e) {
+                    // Ha a mező értéke megváltozik és üres lesz, azonnal töltsük ki újra
+                    if (this.value === '' && isProcessRunning && !shouldStop) {
+                        console.log(`${field.label} mező értéke törlődött, újratöltés...`);
+                        safeSetTimeout(() => {
+                            fillTextInput(field.id, field.hiddenId, field.value);
+                        }, 100);
+                    }
+                });
+            }
+        }
+        
+        // Általános DOM megfigyelő
+        const observer = new MutationObserver(function(mutations) {
+            mutations.forEach(function(mutation) {
+                // Ha a DOM-ban változás történt, ellenőrizzük a mezőket
+                if (mutation.type === 'childList' || mutation.type === 'attributes') {
+                    // Csak akkor ellenőrizzük, ha a folyamat fut
+                    if (isProcessRunning && !shouldStop) {
+                        // Ellenőrizzük a szöveges mezőket
+                        for (const field of FIELDS_CONFIG.textInputs) {
+                            const inputElement = document.getElementById(field.id);
+                            if (inputElement && inputElement.value === '') {
+                                console.log(`${field.label} mező értéke törlődött a DOM változás után, újratöltés...`);
+                                fillTextInput(field.id, field.hiddenId, field.value);
+                            }
+                        }
+                    }
+                }
+            });
+        });
+        
+        // Figyeljük a teljes dokumentumot
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['value']
+        });
+    }
+    
+    // Várjunk, amíg a DOM teljesen betöltődik, majd állítsuk be a megfigyelőt
+    setTimeout(setupMutationObserver, 1000);
+})();
