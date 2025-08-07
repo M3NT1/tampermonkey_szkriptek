@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         IIER2 Automatikus eseménytípus felvétel
 // @namespace    http://tampermonkey.net/
-// @version      3.0
-// @description  Automatikusan felveszi az összes eseménytípust a megadott értékekkel az IIER2 rendszerben - Dinamikus ID felderítéssel
+// @version      3.1
+// @description  Automatikusan felveszi az összes eseménytípust a megadott értékekkel az IIER2 rendszerben - Dinamikus ID felderítéssel és javított popup várakozással
 // @author       You
 // @match        http://iier2-konfig.alig.hu:8080/xhtml/jogcimkezeles/*
 // @grant        none
@@ -553,12 +553,21 @@
                     verifyAllFields(() => {
                         // Mentés
                         clickSaveButton(() => {
+                            if (shouldStop || !isProcessRunning) {
+                                endProcess();
+                                return;
+                            }
+                            
                             // Következő eseménytípus
                             processedEventTypes.push(eventType);
                             currentEventTypeIndex++;
+                            
+                            updateStatus(`Eseménytípus sikeresen feldolgozva: ${eventType}<br>Folytatás következő eseménytípussal...`);
+                            
+                            // Hosszabb várakozás a következő eseménytípus előtt
                             safeSetTimeout(() => {
                                 processNextEventType(allEventTypes);
-                            }, 1000);
+                            }, 3000); // 3 másodperc várakozás a biztonság kedvéért
                         });
                     });
                 });
@@ -927,14 +936,24 @@
         }
         
         updateStatus('Kattintás a mentés gombra...');
-        saveButton.click();
         
-        // Várunk a "Türelmet kérünk" popup eltűnésére
-        waitForLoadingPopupToDisappear(callback);
+        // Várunk egy kicsit a gomb kattintás előtt
+        safeSetTimeout(() => {
+            if (shouldStop || !isProcessRunning) {
+                endProcess();
+                return;
+            }
+            
+            saveButton.click();
+            updateStatus('Mentés gomb megnyomva, várakozás a feldolgozásra...');
+            
+            // Várunk a "Türelmet kérünk" popup eltűnésére
+            waitForLoadingPopupToDisappear(callback);
+        }, 500);
     }
     
     // Várakozás a "Türelmet kérünk" popup eltűnésére
-    function waitForLoadingPopupToDisappear(callback, maxWaitTime = 30000, checkInterval = 500) {
+    function waitForLoadingPopupToDisappear(callback, maxWaitTime = 60000, checkInterval = 300) {
         if (shouldStop || !isProcessRunning) {
             endProcess();
             return;
@@ -944,6 +963,7 @@
         
         let waitStartTime = Date.now();
         let checkCount = 0;
+        let popupWasVisible = false;
         
         function checkForLoadingPopup() {
             if (shouldStop || !isProcessRunning) {
@@ -954,33 +974,69 @@
             checkCount++;
             const elapsedTime = Date.now() - waitStartTime;
             
-            // Ellenőrizzük, hogy létezik-e a "Türelmet kérünk" popup
-            const loadingPopups = Array.from(document.querySelectorAll(`.${FIELDS_CONFIG.loadingPopup.className}`))
+            // Több módon is keressük a loading popup-ot
+            let loadingPopups = [];
+            
+            // 1. Eredeti módszer - class alapján
+            loadingPopups = Array.from(document.querySelectorAll(`.${FIELDS_CONFIG.loadingPopup.className}`))
                 .filter(el => el.textContent.includes(FIELDS_CONFIG.loadingPopup.textContent));
             
+            // 2. Alternatív keresés - minden dialog elem
             if (loadingPopups.length === 0) {
-                // Ha nincs popup, akkor folytathatjuk
+                loadingPopups = Array.from(document.querySelectorAll('.ui-dialog, .ui-dialog-content, .modal, .loading'))
+                    .filter(el => el.textContent.includes('Türelmet') || el.textContent.includes('kérünk') || 
+                                 el.textContent.includes('Várjon') || el.textContent.includes('Loading'));
+            }
+            
+            // 3. Keresés minden látható elemben
+            if (loadingPopups.length === 0) {
+                loadingPopups = Array.from(document.querySelectorAll('*'))
+                    .filter(el => {
+                        const style = getComputedStyle(el);
+                        const isVisible = style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+                        return isVisible && (el.textContent.includes('Türelmet kérünk') || 
+                                           el.textContent.includes('Feldolgozás') ||
+                                           el.textContent.includes('Mentés'));
+                    });
+            }
+            
+            // Ha találtunk popup-ot, jelöljük, hogy volt popup
+            if (loadingPopups.length > 0) {
+                popupWasVisible = true;
+                updateStatus(`"Türelmet kérünk" popup aktív... (${elapsedTime}ms, ${checkCount} ellenőrzés, ${loadingPopups.length} popup)`);
+                console.log('Talált loading popup elemek:', loadingPopups.map(el => el.textContent.trim()));
+                
+                // Folytatjuk az ellenőrzést
+                safeSetTimeout(checkForLoadingPopup, checkInterval);
+                return;
+            }
+            
+            // Ha nincs popup
+            if (popupWasVisible) {
+                // Ha volt popup és most nincs, akkor eltűnt
                 updateStatus(`"Türelmet kérünk" popup eltűnt (${elapsedTime}ms után, ${checkCount} ellenőrzés után).`);
                 
                 // Várunk még egy kicsit, hogy biztosan befejeződjön a mentés
                 safeSetTimeout(() => {
                     if (callback) callback();
-                }, 1000);
+                }, 2000); // Hosszabb várakozás a biztonság kedvéért
+            } else if (elapsedTime < 5000) {
+                // Ha még nem volt popup és kevés idő telt el, várunk még
+                updateStatus(`Várakozás a popup megjelenésére... (${elapsedTime}ms, ${checkCount} ellenőrzés)`);
+                safeSetTimeout(checkForLoadingPopup, checkInterval);
             } else if (elapsedTime > maxWaitTime) {
                 // Ha túl sokáig vártunk, akkor folytatjuk
                 updateStatus(`Várakozási idő túllépve (${maxWaitTime}ms). Folytatás...`, true);
-                
                 if (callback) callback();
             } else {
-                // Még mindig látható a popup, várunk még
-                updateStatus(`Várakozás a "Türelmet kérünk" popup eltűnésére... (${elapsedTime}ms, ${checkCount} ellenőrzés)`);
-                
+                // Nincs popup, de várunk még egy kicsit
+                updateStatus(`Nincs loading popup, de várunk még... (${elapsedTime}ms, ${checkCount} ellenőrzés)`);
                 safeSetTimeout(checkForLoadingPopup, checkInterval);
             }
         }
         
-        // Indítjuk az ellenőrzést
-        safeSetTimeout(checkForLoadingPopup, 1000); // Várunk egy kicsit, hogy megjelenjen a popup
+        // Indítjuk az ellenőrzést azonnal
+        safeSetTimeout(checkForLoadingPopup, 500); // Rövidebb kezdeti várakozás
     }
     
     // Kattintás az új felvitel gombra
