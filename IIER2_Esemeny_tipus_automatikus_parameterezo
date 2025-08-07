@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         IIER2 Automatikus eseménytípus felvétel
 // @namespace    http://tampermonkey.net/
-// @version      2.2
-// @description  Automatikusan felveszi az összes eseménytípust a megadott értékekkel az IIER2 rendszerben
+// @version      3.0
+// @description  Automatikusan felveszi az összes eseménytípust a megadott értékekkel az IIER2 rendszerben - Dinamikus ID felderítéssel
 // @author       You
 // @match        http://iier2-konfig.alig.hu:8080/xhtml/jogcimkezeles/*
 // @grant        none
@@ -75,6 +75,15 @@
     stopButton.className = 'stop-button';
     document.body.appendChild(stopButton);
 
+    // Diagnosztikai gomb
+    const diagButton = document.createElement('button');
+    diagButton.textContent = 'Diagnosztika';
+    diagButton.className = 'auto-fill-button';
+    diagButton.style.top = '10px';
+    diagButton.style.right = '350px';
+    diagButton.style.backgroundColor = '#2196F3';
+    document.body.appendChild(diagButton);
+
     // Státusz panel létrehozása
     const statusPanel = document.createElement('div');
     statusPanel.className = 'auto-fill-status';
@@ -88,51 +97,58 @@
     let processedEventTypes = [];
     let timeoutIds = []; // Az összes időzítő tárolása
 
-    // Konstansok a kitöltendő mezőkhöz
+    // Konstansok a kitöltendő mezőkhöz - most dinamikusan felderítjük őket
     const FIELDS_CONFIG = {
-        eventTypeSelectId: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:asyncEventTypeHivatkozasiNev_input',
-        eventTypeSelectInputId: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:asyncEventTypeHivatkozasiNev_input_input',
+        // Dinamikusan felderített ID-k lesznek itt tárolva
+        eventTypeSelectId: null,
+        eventTypeSelectInputId: null,
         textInputs: [
             {
-                id: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:eventConfig_retryCount_input_input',
-                hiddenId: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:eventConfig_retryCount_input_hinput',
+                id: null,
+                hiddenId: null,
                 value: '10',
-                label: 'Újrapróbálkozások száma'
+                label: 'Újrapróbálkozások száma',
+                pattern: 'retryCount'
             },
             {
-                id: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:eventConfig_retryInterval_input_input',
-                hiddenId: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:eventConfig_retryInterval_input_hinput',
+                id: null,
+                hiddenId: null,
                 value: '600',
-                label: 'Újrapróbálkozások közti idő'
+                label: 'Újrapróbálkozások közti idő',
+                pattern: 'retryInterval'
             },
             {
-                id: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:eventConfig_priority_input_input',
-                hiddenId: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:eventConfig_priority_input_hinput',
+                id: null,
+                hiddenId: null,
                 value: '50',
-                label: 'Prioritás'
+                label: 'Prioritás',
+                pattern: 'priority_input'
             },
             {
-                id: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:eventConfig_threadTimeout_input_input',
-                hiddenId: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:eventConfig_threadTimeout_input_hinput',
+                id: null,
+                hiddenId: null,
                 value: '900',
-                label: 'Futások maximális ideje'
+                label: 'Futások maximális ideje',
+                pattern: 'threadTimeout'
             }
         ],
         dropdowns: [
             {
-                id: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:eventConfig_priorityCategory_input',
+                id: null,
                 value: 'NORMAL',
-                label: 'Prioritás kategória'
+                label: 'Prioritás kategória',
+                pattern: 'priorityCategory'
             },
             {
-                id: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:eventConfig_nodeDomain_input',
+                id: null,
                 value: 'GINOP_TELJES',
-                label: 'Domain'
+                label: 'Domain',
+                pattern: 'nodeDomain'
             }
         ],
         buttons: {
-            save: 'j_idt77:j_idt79_save',
-            newEntry: 'j_idt77:j_idt79:mainTabView:jogcim:eljarasTipus:feladatTipus:feladatTipusEsemenyKonfiguracio:j_id423'
+            save: null,
+            newEntry: null
         },
         loadingPopup: {
             className: 'ui-dialog-content ui-widget-content',
@@ -143,6 +159,259 @@
     // Gomb eseménykezelők
     startButton.addEventListener('click', startAutomatedProcess);
     stopButton.addEventListener('click', stopAutomatedProcess);
+    diagButton.addEventListener('click', runDiagnostics);
+
+    // Dinamikus ID felderítő függvények
+    function discoverElementIds() {
+        updateStatus('🔍 Elemek felderítése...');
+        
+        let discoveryReport = '<strong>🔍 ELEMEK FELDERÍTÉSE</strong><br><br>';
+        let allFound = true;
+        
+        // 1. Eseménytípus select elem felderítése
+        discoveryReport += '<strong>1. Eseménytípus select elem:</strong><br>';
+        const eventTypeSelect = discoverEventTypeSelect();
+        if (eventTypeSelect.found) {
+            FIELDS_CONFIG.eventTypeSelectId = eventTypeSelect.selectId;
+            FIELDS_CONFIG.eventTypeSelectInputId = eventTypeSelect.inputId;
+            discoveryReport += `✅ Select ID: ${eventTypeSelect.selectId}<br>`;
+            discoveryReport += `✅ Input ID: ${eventTypeSelect.inputId}<br>`;
+        } else {
+            discoveryReport += `❌ Nem található eseménytípus select elem<br>`;
+            allFound = false;
+        }
+        
+        // 2. Szöveges input mezők felderítése
+        discoveryReport += '<br><strong>2. Szöveges input mezők:</strong><br>';
+        for (const field of FIELDS_CONFIG.textInputs) {
+            const inputIds = discoverTextInput(field.pattern);
+            if (inputIds.found) {
+                field.id = inputIds.id;
+                field.hiddenId = inputIds.hiddenId;
+                discoveryReport += `✅ ${field.label}: ${inputIds.id}<br>`;
+                if (inputIds.hiddenId) {
+                    discoveryReport += `   Hidden: ${inputIds.hiddenId}<br>`;
+                }
+            } else {
+                discoveryReport += `❌ ${field.label} (${field.pattern}) nem található<br>`;
+                allFound = false;
+            }
+        }
+        
+        // 3. Legördülő menük felderítése
+        discoveryReport += '<br><strong>3. Legördülő menük:</strong><br>';
+        for (const field of FIELDS_CONFIG.dropdowns) {
+            const dropdownId = discoverDropdown(field.pattern);
+            if (dropdownId.found) {
+                field.id = dropdownId.id;
+                discoveryReport += `✅ ${field.label}: ${dropdownId.id}<br>`;
+            } else {
+                discoveryReport += `❌ ${field.label} (${field.pattern}) nem található<br>`;
+                allFound = false;
+            }
+        }
+        
+        // 4. Gombok felderítése
+        discoveryReport += '<br><strong>4. Gombok:</strong><br>';
+        const buttons = discoverButtons();
+        if (buttons.save) {
+            FIELDS_CONFIG.buttons.save = buttons.save;
+            discoveryReport += `✅ Mentés gomb: ${buttons.save}<br>`;
+        } else {
+            discoveryReport += `❌ Mentés gomb nem található<br>`;
+            allFound = false;
+        }
+        
+        if (buttons.newEntry) {
+            FIELDS_CONFIG.buttons.newEntry = buttons.newEntry;
+            discoveryReport += `✅ Új felvitel gomb: ${buttons.newEntry}<br>`;
+        } else {
+            discoveryReport += `❌ Új felvitel gomb nem található<br>`;
+            allFound = false;
+        }
+        
+        discoveryReport += `<br><strong>${allFound ? '✅ Minden elem sikeresen felderítve!' : '❌ Nem minden elem található!'}</strong>`;
+        
+        updateStatus(discoveryReport, !allFound);
+        console.log('=== ELEMEK FELDERÍTÉSE ===');
+        console.log(discoveryReport.replace(/<br>/g, '\n').replace(/<[^>]*>/g, ''));
+        
+        return allFound;
+    }
+    
+    function discoverEventTypeSelect() {
+        // Keressük az asyncEventType select elemet
+        const selects = document.querySelectorAll('select[id*="asyncEventType"]');
+        for (const select of selects) {
+            if (select.id.includes('_input_input')) {
+                const baseId = select.id.replace('_input_input', '_input');
+                return {
+                    found: true,
+                    selectId: baseId,
+                    inputId: select.id
+                };
+            }
+        }
+        
+        // Alternatív keresés
+        const allSelects = document.querySelectorAll('select');
+        for (const select of allSelects) {
+            if (select.id.includes('EventType') && select.options.length > 1) {
+                const baseId = select.id.replace('_input_input', '_input');
+                return {
+                    found: true,
+                    selectId: baseId,
+                    inputId: select.id
+                };
+            }
+        }
+        
+        return { found: false };
+    }
+    
+    function discoverTextInput(pattern) {
+        // Keressük a minta alapján az input elemeket
+        const inputs = document.querySelectorAll(`input[id*="${pattern}"]`);
+        
+        for (const input of inputs) {
+            if (input.id.includes('_input_input') && input.type === 'text') {
+                const hiddenId = input.id.replace('_input_input', '_input_hinput');
+                const hiddenElement = document.getElementById(hiddenId);
+                
+                return {
+                    found: true,
+                    id: input.id,
+                    hiddenId: hiddenElement ? hiddenId : null
+                };
+            }
+        }
+        
+        return { found: false };
+    }
+    
+    function discoverDropdown(pattern) {
+        // Keressük a minta alapján a select elemeket
+        const selects = document.querySelectorAll(`select[id*="${pattern}"]`);
+        
+        for (const select of selects) {
+            if (select.id.includes('_input_input')) {
+                return {
+                    found: true,
+                    id: select.id
+                };
+            }
+        }
+        
+        return { found: false };
+    }
+    
+    function discoverButtons() {
+        let saveButton = null;
+        let newEntryButton = null;
+        
+        // Mentés gomb keresése - általában _save végződésű ID
+        const allButtons = document.querySelectorAll('button, input[type="button"], input[type="submit"]');
+        
+        for (const button of allButtons) {
+            // Mentés gomb
+            if (button.id && button.id.includes('_save')) {
+                saveButton = button.id;
+            }
+            
+            // Új felvitel gomb - általában j_id-val kezdődik és gomb szövege alapján
+            if (button.id && button.id.includes('j_id') && 
+                (button.textContent.includes('Új') || button.textContent.includes('Hozzáadás') || 
+                 button.getAttribute('title')?.includes('Új') || button.getAttribute('value')?.includes('Új'))) {
+                newEntryButton = button.id;
+            }
+        }
+        
+        // Ha nem találtunk mentés gombot, keressük a form alapján
+        if (!saveButton) {
+            const forms = document.querySelectorAll('form');
+            for (const form of forms) {
+                if (form.id && form.id.includes('j_idt')) {
+                    const formBaseId = form.id.replace(/(:.*)?$/, '');
+                    const potentialSaveId = formBaseId + '_save';
+                    if (document.getElementById(potentialSaveId)) {
+                        saveButton = potentialSaveId;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        return {
+            save: saveButton,
+            newEntry: newEntryButton
+        };
+    }
+    
+    // Diagnosztikai függvény
+    function runDiagnostics() {
+        statusPanel.style.display = 'block';
+        statusPanel.style.backgroundColor = '#e3f2fd';
+        statusPanel.style.borderColor = '#bbdefb';
+        
+        let diagnosticInfo = '<strong>🔍 DIAGNOSZTIKAI JELENTÉS</strong><br><br>';
+        
+        // Először dinamikus felderítés
+        updateStatus('Dinamikus felderítés futtatása...');
+        const allElementsFound = discoverElementIds();
+        
+        // 1. Dinamikus felderítés eredménye
+        diagnosticInfo += '<strong>1. Dinamikus felderítés eredménye:</strong><br>';
+        diagnosticInfo += `• Összes elem megtalálva: ${allElementsFound ? '✅ IGEN' : '❌ NEM'}<br>`;
+        diagnosticInfo += `• Eseménytípus select: ${FIELDS_CONFIG.eventTypeSelectId ? '✅ ' + FIELDS_CONFIG.eventTypeSelectId : '❌ HIÁNYZIK'}<br>`;
+        diagnosticInfo += `• Eseménytípus input: ${FIELDS_CONFIG.eventTypeSelectInputId ? '✅ ' + FIELDS_CONFIG.eventTypeSelectInputId : '❌ HIÁNYZIK'}<br><br>`;
+        
+        // 2. Szöveges mezők
+        diagnosticInfo += '<strong>2. Szöveges mezők:</strong><br>';
+        for (const field of FIELDS_CONFIG.textInputs) {
+            diagnosticInfo += `• ${field.label}: ${field.id ? '✅ ' + field.id : '❌ HIÁNYZIK'}<br>`;
+        }
+        
+        // 3. Legördülő menük
+        diagnosticInfo += '<br><strong>3. Legördülő menük:</strong><br>';
+        for (const field of FIELDS_CONFIG.dropdowns) {
+            diagnosticInfo += `• ${field.label}: ${field.id ? '✅ ' + field.id : '❌ HIÁNYZIK'}<br>`;
+        }
+        
+        // 4. Gombok
+        diagnosticInfo += '<br><strong>4. Gombok:</strong><br>';
+        diagnosticInfo += `• Mentés gomb: ${FIELDS_CONFIG.buttons.save ? '✅ ' + FIELDS_CONFIG.buttons.save : '❌ HIÁNYZIK'}<br>`;
+        diagnosticInfo += `• Új felvitel gomb: ${FIELDS_CONFIG.buttons.newEntry ? '✅ ' + FIELDS_CONFIG.buttons.newEntry : '❌ HIÁNYZIK'}<br>`;
+        
+        // 5. Táblázat elemzése
+        diagnosticInfo += '<br><strong>5. Táblázat elemzése:</strong><br>';
+        const tableRows = document.querySelectorAll('tr[data-ri]');
+        diagnosticInfo += `• Talált táblázat sorok: ${tableRows.length}<br>`;
+        
+        if (tableRows.length > 0) {
+            const firstRow = tableRows[0];
+            const cells = firstRow.querySelectorAll('td');
+            diagnosticInfo += `• Első sor cellák száma: ${cells.length}<br>`;
+            cells.forEach((cell, index) => {
+                const content = cell.textContent.trim();
+                diagnosticInfo += `  ${index + 1}. cella: "${content.substring(0, 50)}${content.length > 50 ? '...' : ''}"<br>`;
+            });
+        }
+        
+        // 6. Eseménytípusok lekérése teszt
+        diagnosticInfo += '<br><strong>6. Eseménytípusok lekérése teszt:</strong><br>';
+        const eventTypes = getAvailableEventTypes();
+        diagnosticInfo += `• Talált eseménytípusok: ${eventTypes.length}<br>`;
+        if (eventTypes.length > 0) {
+            diagnosticInfo += `• Első 10 eseménytípus:<br>`;
+            eventTypes.slice(0, 10).forEach((type, index) => {
+                diagnosticInfo += `  ${index + 1}. "${type}"<br>`;
+            });
+        }
+        
+        statusPanel.innerHTML = diagnosticInfo;
+        console.log('=== DIAGNOSZTIKAI JELENTÉS ===');
+        console.log(diagnosticInfo.replace(/<br>/g, '\n').replace(/<[^>]*>/g, ''));
+    }
 
     // Saját setTimeout függvény, amely nyilvántartja az időzítőket
     function safeSetTimeout(callback, delay) {
@@ -175,6 +444,15 @@
         statusPanel.style.display = 'block';
         
         updateStatus('Automatikus folyamat indítása...');
+        
+        // Először felderítjük az elemeket dinamikusan
+        const allElementsFound = discoverElementIds();
+        
+        if (!allElementsFound) {
+            updateStatus('❌ Nem minden szükséges elem található! A folyamat nem indítható el.', true);
+            endProcess();
+            return;
+        }
         
         // Eseménytípusok lekérése
         const eventTypes = getAvailableEventTypes();
@@ -473,12 +751,14 @@
         }
         
         try {
-            // Legördülő menü megnyitása
+            // Legördülő menü megnyitása - használjuk a _input_input ID-t
             const selectElement = document.getElementById(selectId);
             if (!selectElement) {
                 updateStatus(`Legördülő menü nem található: ${selectId}`, true);
                 return false;
             }
+            
+            updateStatus(`Legördülő menü kiválasztása: ${value} (${selectId})`);
             
             // Kattintás a legördülő menüre
             selectElement.click();
@@ -504,7 +784,9 @@
                                 return;
                             }
                             
-                            const label = document.getElementById(`${selectId}_label`);
+                            // A label ID most a _input_input végződésű ID-ből _input_label lesz
+                            const labelId = selectId.replace('_input_input', '_input_label');
+                            const label = document.getElementById(labelId);
                             if (label && label.textContent.trim() !== value) {
                                 updateStatus(`A legördülő menü címkéje nem frissült. Közvetlen beállítás...`, true);
                                 
@@ -513,10 +795,10 @@
                                     label.textContent = value;
                                 }
                                 
-                                const hiddenSelect = document.getElementById(`${selectId}_input`);
-                                if (hiddenSelect) {
-                                    hiddenSelect.value = value;
-                                    triggerEvent(hiddenSelect, 'change');
+                                // A select elem maga
+                                if (selectElement) {
+                                    selectElement.value = value;
+                                    triggerEvent(selectElement, 'change');
                                 }
                             }
                         }, 200);
@@ -526,13 +808,13 @@
                         updateStatus(`Nem található elem a legördülő menüben: ${value}`, true);
                         
                         // Közvetlen beállítás
-                        const hiddenSelect = document.getElementById(`${selectId}_input`);
-                        if (hiddenSelect) {
-                            hiddenSelect.value = value;
-                            triggerEvent(hiddenSelect, 'change');
+                        if (selectElement) {
+                            selectElement.value = value;
+                            triggerEvent(selectElement, 'change');
                         }
                         
-                        const label = document.getElementById(`${selectId}_label`);
+                        const labelId = selectId.replace('_input_input', '_input_label');
+                        const label = document.getElementById(labelId);
                         if (label) {
                             label.textContent = value;
                         }
@@ -589,9 +871,11 @@
         
         // Legördülő menük ellenőrzése
         for (const field of FIELDS_CONFIG.dropdowns) {
-            const labelElement = document.getElementById(`${field.id}_label`);
+            // A label ID a _input_input végződésű ID-ből _input_label lesz
+            const labelId = field.id.replace('_input_input', '_input_label');
+            const labelElement = document.getElementById(labelId);
             if (!labelElement) {
-                statusMessage += `❌ ${field.label} címke nem található<br>`;
+                statusMessage += `❌ ${field.label} címke nem található (${labelId})<br>`;
                 allFieldsCorrect = false;
                 continue;
             }
@@ -734,13 +1018,55 @@
     // Elérhető eseménytípusok lekérése
     function getAvailableEventTypes() {
         try {
-            const selectElement = document.getElementById(FIELDS_CONFIG.eventTypeSelectInputId);
-            if (!selectElement) return [];
+            // Próbáljuk meg megtalálni az eseménytípus select elemet többféle módon
+            let selectElement = document.getElementById(FIELDS_CONFIG.eventTypeSelectInputId);
+            
+            // Ha nem található, próbáljuk meg alternatív módszerekkel
+            if (!selectElement) {
+                console.log('Próbálkozás alternatív ID-vel...');
+                selectElement = document.getElementById(FIELDS_CONFIG.eventTypeSelectId);
+            }
+            
+            if (!selectElement) {
+                console.log('Próbálkozás CSS szelektorral...');
+                selectElement = document.querySelector('select[id*="asyncEventTypeHivatkozasiNev"]');
+            }
+            
+            if (!selectElement) {
+                console.log('Keresés minden select elemben...');
+                const allSelects = document.querySelectorAll('select');
+                console.log(`Talált select elemek száma: ${allSelects.length}`);
+                
+                for (let i = 0; i < allSelects.length; i++) {
+                    const select = allSelects[i];
+                    console.log(`Select ${i}: ID="${select.id}", options=${select.options.length}`);
+                    if (select.id.includes('asyncEventType') || select.id.includes('EventType')) {
+                        selectElement = select;
+                        console.log(`Talált megfelelő select elem: ${select.id}`);
+                        break;
+                    }
+                }
+            }
+            
+            if (!selectElement) {
+                console.log('Nem található eseménytípus select elem');
+                return [];
+            }
+            
+            console.log(`Használt select elem ID: ${selectElement.id}`);
+            console.log(`Options száma: ${selectElement.options.length}`);
             
             const options = Array.from(selectElement.options);
-            return options
-                .filter(option => option.value && option.value !== '&nbsp;')
-                .map(option => option.value);
+            const eventTypes = options
+                .filter(option => {
+                    const hasValue = option.value && option.value !== '&nbsp;' && option.value !== '';
+                    const hasText = option.text && option.text.trim() !== '' && option.text.trim() !== '&nbsp;';
+                    return hasValue || hasText;
+                })
+                .map(option => option.value || option.text);
+            
+            console.log(`Talált eseménytípusok:`, eventTypes);
+            return eventTypes;
         } catch (error) {
             console.error('Hiba az eseménytípusok lekérése közben:', error);
             return [];
@@ -753,17 +1079,23 @@
             const rows = document.querySelectorAll('tr[data-ri]');
             const existingTypes = [];
             
-            rows.forEach(row => {
+            console.log(`Talált táblázat sorok száma: ${rows.length}`);
+            
+            rows.forEach((row, index) => {
                 // A harmadik cella tartalmazza az eseménytípust
                 const cells = row.querySelectorAll('td');
+                console.log(`Sor ${index + 1}: cellák száma = ${cells.length}`);
+                
                 if (cells.length >= 3) {
                     const eventType = cells[2].textContent.trim();
+                    console.log(`Sor ${index + 1}, 3. cella tartalma: "${eventType}"`);
                     if (eventType) {
                         existingTypes.push(eventType);
                     }
                 }
             });
             
+            console.log('Már felvett eseménytípusok:', existingTypes);
             return existingTypes;
         } catch (error) {
             console.error('Hiba a meglévő eseménytípusok lekérése közben:', error);
