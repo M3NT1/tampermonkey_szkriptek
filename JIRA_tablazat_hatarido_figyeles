@@ -1,0 +1,340 @@
+// ==UserScript==
+// @name         JIRA Project Highlighter - Határidő számláló
+// @namespace    http://tampermonkey.net/
+// @version      1.5
+// @description  Színkódokkal kiemeli a különböző projekteket, assignee-kat, határidőket és mutatja a határidőig hátralévő napokat
+// @author       M3NT1
+// @match        https://jira.ulyssys.hu/issues/*
+// @grant        GM_addStyle
+// @run-at       document-start
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // Projekt konfigurációk - könnyen bővíthető
+    const projectConfigs = [
+        {
+            keyword: "EFOP",
+            color: "#0066cc", // Kék szín
+            textColor: "white"
+        },
+        {
+            keyword: "EKK2",
+            color: "#ff8c00", // Narancs szín
+            textColor: "white"
+        }
+        // További projektek hozzáadhatók ide az alábbi formátumban:
+        // { keyword: "PROJEKTNÉV", color: "#SZÍNKÓD", textColor: "SZÖVEGSZÍN" }
+    ];
+
+    // Mai dátum
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // CSS hozzáadása a formázásokhoz
+    const style = document.createElement('style');
+    style.textContent = `
+        /* Elrejtjük a summary cellákat, amíg nem dolgozzuk fel őket */
+        td.summary:not(.processed) {
+            visibility: hidden;
+        }
+        /* Amint feldolgoztuk, újra láthatóvá tesszük */
+        td.summary.processed {
+            visibility: visible;
+        }
+        /* Assignee cella kék kerettel, ha van hozzárendelve */
+        td.assignee.has-assignee {
+            border: 2px solid #0066cc !important;
+            box-shadow: 0 0 5px rgba(0, 102, 204, 0.5);
+        }
+        /* Due date színezések */
+        td.duedate.overdue {
+            background-color: #ffcccc !important; /* Piros háttér a lejárt határidőknek */
+            color: #cc0000 !important;
+            font-weight: bold !important;
+        }
+        td.duedate.soon {
+            background-color: #fff2cc !important; /* Sárga háttér a közelgő határidőknek */
+            color: #996600 !important;
+            font-weight: bold !important;
+        }
+        /* Határidő számláló oszlop */
+        td.due-countdown {
+            text-align: center;
+            font-weight: bold;
+        }
+        td.due-countdown.overdue {
+            color: #cc0000 !important;
+        }
+        td.due-countdown.soon {
+            color: #996600 !important;
+        }
+        td.due-countdown.future {
+            color: #006600 !important;
+        }
+    `;
+    document.head.appendChild(style);
+
+    // Dátum feldolgozó függvény
+    function parseDate(dateStr) {
+        // Feltételezzük, hogy a dátum formátuma: YYYY.MM.DD
+        const parts = dateStr.trim().split('.');
+        if (parts.length === 3) {
+            return new Date(parts[0], parts[1] - 1, parts[2]);
+        }
+        return null;
+    }
+
+    // Napok különbségét számoló függvény
+    function daysBetween(date1, date2) {
+        const oneDay = 24 * 60 * 60 * 1000; // milliszekundumok egy napban
+        return Math.round((date1 - date2) / oneDay);
+    }
+
+    // Napok számát formázó függvény
+    function formatDaysRemaining(days) {
+        if (days === 0) {
+            return "Ma";
+        } else if (days === 1) {
+            return "1 nap";
+        } else if (days === -1) {
+            return "-1 nap";
+        } else if (days > 1 && days < 7) {
+            return days + " nap";
+        } else if (days < -1 && days > -7) {
+            return days + " nap";
+        } else if (days >= 7 && days < 30) {
+            const weeks = Math.floor(days / 7);
+            return weeks + (weeks === 1 ? " hét" : " hét");
+        } else if (days <= -7 && days > -30) {
+            const weeks = Math.floor(-days / 7);
+            return "-" + weeks + (weeks === 1 ? " hét" : " hét");
+        } else if (days >= 30) {
+            const months = Math.floor(days / 30);
+            return months + (months === 1 ? " hónap" : " hónap");
+        } else if (days <= -30) {
+            const months = Math.floor(-days / 30);
+            return "-" + months + (months === 1 ? " hónap" : " hónap");
+        }
+        return days + " nap";
+    }
+
+    // Új oszlop beszúrása a táblázatba
+    function addCountdownColumn() {
+        // Ellenőrizzük, hogy már hozzáadtuk-e az oszlopot
+        if (document.querySelector('th.headerrow-due-countdown')) {
+            return;
+        }
+
+        // Keressük meg a táblázat fejlécét
+        const headerRow = document.querySelector('tr.rowHeader');
+        if (!headerRow) return;
+
+        // Keressük meg a duedate oszlopot
+        const dueDateHeader = headerRow.querySelector('th.headerrow-duedate');
+        if (!dueDateHeader) return;
+
+        // Hozzunk létre egy új fejléc cellát
+        const countdownHeader = document.createElement('th');
+        countdownHeader.className = 'colHeaderLink headerrow-due-countdown';
+        countdownHeader.innerHTML = '<span title="Határidő számláló">Határidő számláló</span>';
+
+        // Szúrjuk be a duedate oszlop után
+        dueDateHeader.parentNode.insertBefore(countdownHeader, dueDateHeader.nextSibling);
+
+        // Most adjunk hozzá egy üres cellát minden sorhoz
+        const rows = document.querySelectorAll('#issuetable tbody tr');
+        rows.forEach(row => {
+            // Csak akkor adjunk hozzá cellát, ha még nincs
+            if (!row.querySelector('td.due-countdown')) {
+                const dueDateCell = row.querySelector('td.duedate');
+                if (dueDateCell) {
+                    const countdownCell = document.createElement('td');
+                    countdownCell.className = 'due-countdown';
+
+                    // Szúrjuk be a duedate cella után
+                    dueDateCell.parentNode.insertBefore(countdownCell, dueDateCell.nextSibling);
+                }
+            }
+        });
+    }
+
+    // Feldolgozó függvény
+    function processTable() {
+        // Először adjuk hozzá a countdown oszlopot, ha még nem létezik
+        addCountdownColumn();
+
+        // Summary cellák feldolgozása
+        const summaryCells = document.querySelectorAll('td.summary:not(.processed)');
+
+        if (summaryCells.length > 0) {
+            // Végigmegyünk minden summary cellán
+            summaryCells.forEach(cell => {
+                const linkElement = cell.querySelector('a.issue-link');
+                if (!linkElement) {
+                    cell.classList.add('processed');
+                    return;
+                }
+
+                const summaryText = linkElement.textContent || '';
+                let matched = false;
+
+                // Ellenőrizzük, hogy a cella tartalmaz-e valamelyik kulcsszót
+                for (const config of projectConfigs) {
+                    if (summaryText.includes(config.keyword)) {
+                        // Kiemeljük a kulcsszót a szövegben
+                        const originalText = linkElement.textContent;
+                        const highlightedText = originalText.replace(
+                            new RegExp(`(${config.keyword})`, 'g'),
+                            `<span style="background-color: ${config.color}; color: ${config.textColor}; padding: 2px 4px; border-radius: 3px;">$1</span>`
+                        );
+
+                        // Beállítjuk a módosított HTML-t
+                        linkElement.innerHTML = highlightedText;
+                        matched = true;
+                        break; // Ha megtaláltuk az első egyezést, nem keresünk tovább
+                    }
+                }
+
+                // Megjelöljük a cellát feldolgozottként
+                cell.classList.add('processed');
+            });
+        }
+
+        // Assignee cellák feldolgozása
+        const assigneeCells = document.querySelectorAll('td.assignee:not(.processed)');
+
+        if (assigneeCells.length > 0) {
+            // Végigmegyünk minden assignee cellán
+            assigneeCells.forEach(cell => {
+                // Ellenőrizzük, hogy a cella nem tartalmazza-e az "Unassigned" szöveget
+                const cellText = cell.textContent.trim();
+                if (cellText !== "Unassigned" && !cellText.includes("Unassigned")) {
+                    // Ha van hozzárendelve valaki, akkor kék kerettel jelöljük
+                    cell.classList.add('has-assignee');
+                }
+
+                // Megjelöljük a cellát feldolgozottként
+                cell.classList.add('processed');
+            });
+        }
+
+        // Due date cellák feldolgozása
+        const dueDateCells = document.querySelectorAll('td.duedate:not(.processed)');
+
+        if (dueDateCells.length > 0) {
+            // Végigmegyünk minden due date cellán
+            dueDateCells.forEach(cell => {
+                const dateText = cell.textContent.trim();
+                if (dateText) {
+                    const dueDate = parseDate(dateText);
+
+                    if (dueDate) {
+                        // Kiszámoljuk a napok különbségét (pozitív: jövőbeli, negatív: múltbeli)
+                        const dayDiff = daysBetween(dueDate, today);
+
+                        // Ellenőrizzük, hogy a határidő a mai nap vagy régebbi
+                        if (dayDiff <= 0) {
+                            cell.classList.add('overdue'); // Lejárt vagy mai határidő
+                        } else if (dayDiff <= 3) {
+                            cell.classList.add('soon'); // 1-3 nap közötti határidő
+                        }
+
+                        // Keressük meg a megfelelő countdown cellát
+                        const countdownCell = cell.nextElementSibling;
+                        if (countdownCell && countdownCell.classList.contains('due-countdown')) {
+                            // Formázott szöveg a napok számáról
+                            countdownCell.textContent = formatDaysRemaining(dayDiff);
+
+                            // Színezzük a countdown cellát is
+                            if (dayDiff <= 0) {
+                                countdownCell.classList.add('overdue');
+                            } else if (dayDiff <= 3) {
+                                countdownCell.classList.add('soon');
+                            } else {
+                                countdownCell.classList.add('future');
+                            }
+                        }
+                    }
+                }
+
+                // Megjelöljük a cellát feldolgozottként
+                cell.classList.add('processed');
+            });
+        }
+
+        // Ha találtunk cellákat, ellenőrizzük újra később
+        if (summaryCells.length > 0 || assigneeCells.length > 0 || dueDateCells.length > 0) {
+            setTimeout(checkForNewCells, 500);
+        } else {
+            setTimeout(checkForNewCells, 1000);
+        }
+    }
+
+    // Folyamatosan ellenőrizzük, hogy vannak-e új cellák
+    function checkForNewCells() {
+        if (document.querySelector('td.summary:not(.processed)') ||
+            document.querySelector('td.assignee:not(.processed)') ||
+            document.querySelector('td.duedate:not(.processed)')) {
+            processTable();
+        } else {
+            setTimeout(checkForNewCells, 1000);
+        }
+    }
+
+    // MutationObserver a dinamikusan betöltődő tartalom kezelésére
+    function setupObserver() {
+        const observer = new MutationObserver((mutations) => {
+            let shouldProcess = false;
+
+            for (const mutation of mutations) {
+                if (mutation.addedNodes.length) {
+                    const hasRelevantNodes = Array.from(mutation.addedNodes).some(node => {
+                        return node.nodeType === 1 && (
+                            (node.classList && (
+                                node.classList.contains('summary') ||
+                                node.classList.contains('assignee') ||
+                                node.classList.contains('duedate')
+                            )) ||
+                            (node.querySelector && (
+                                node.querySelector('td.summary') ||
+                                node.querySelector('td.assignee') ||
+                                node.querySelector('td.duedate') ||
+                                node.querySelector('tr.rowHeader') ||
+                                node.querySelector('#issuetable')
+                            ))
+                        );
+                    });
+
+                    if (hasRelevantNodes) {
+                        shouldProcess = true;
+                        break;
+                    }
+                }
+            }
+
+            if (shouldProcess) {
+                processTable();
+            }
+        });
+
+        // Csak a táblázat konténerét figyeljük
+        const tableContainer = document.querySelector('#issuetable') || document.body;
+        observer.observe(tableContainer, { childList: true, subtree: true });
+    }
+
+    // Indítás, amikor az oldal betöltődött
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => {
+            processTable();
+            setupObserver();
+        });
+    } else {
+        processTable();
+        setupObserver();
+    }
+
+    // Kezdjük el az ellenőrzést már most
+    setTimeout(checkForNewCells, 100);
+})();
