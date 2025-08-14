@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         JIRA Project Highlighter - Határidő számláló
+// @name         JIRA Project Highlighter - Teljes verzió
 // @namespace    http://tampermonkey.net/
-// @version      1.5
+// @version      1.6
 // @description  Színkódokkal kiemeli a különböző projekteket, assignee-kat, határidőket és mutatja a határidőig hátralévő napokat
 // @author       M3NT1
 // @match        https://jira.ulyssys.hu/issues/*
@@ -32,6 +32,9 @@
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
+    // Speciális dátum a "nincs határidő" jelzésére
+    const NO_DUE_DATE = "2000.01.01";
+
     // CSS hozzáadása a formázásokhoz
     const style = document.createElement('style');
     style.textContent = `
@@ -59,6 +62,11 @@
             color: #996600 !important;
             font-weight: bold !important;
         }
+        td.duedate.no-due-date {
+            background-color: #f2f2f2 !important; /* Szürke háttér a hiányzó határidőknek */
+            color: #666666 !important;
+            font-style: italic !important;
+        }
         /* Határidő számláló oszlop */
         td.due-countdown {
             text-align: center;
@@ -72,6 +80,15 @@
         }
         td.due-countdown.future {
             color: #006600 !important;
+        }
+        td.due-countdown.no-due-date-old {
+            color: #cc0000 !important;
+            font-style: italic !important;
+        }
+        td.due-countdown.no-due-date-recent {
+            color: #996600 !important;
+            background-color: #fffde7 !important; /* Halvány sárga háttér */
+            font-style: italic !important;
         }
     `;
     document.head.appendChild(style);
@@ -227,7 +244,43 @@
             // Végigmegyünk minden due date cellán
             dueDateCells.forEach(cell => {
                 const dateText = cell.textContent.trim();
-                if (dateText) {
+
+                // Keressük meg a megfelelő countdown cellát
+                const countdownCell = cell.nextElementSibling;
+                if (!countdownCell || !countdownCell.classList.contains('due-countdown')) {
+                    cell.classList.add('processed');
+                    return;
+                }
+
+                // Ellenőrizzük, hogy ez egy "nincs határidő" eset-e (2000.01.01)
+                if (dateText === NO_DUE_DATE) {
+                    // Jelöljük a due date cellát
+                    cell.classList.add('no-due-date');
+
+                    // Írjuk be a "Nincs megadva határidő" szöveget
+                    countdownCell.textContent = "Nincs megadva határidő";
+
+                    // Keressük meg a created dátumot
+                    const row = cell.closest('tr');
+                    const createdCell = row ? row.querySelector('td.created') : null;
+
+                    if (createdCell) {
+                        const createdText = createdCell.textContent.trim();
+                        const createdDate = parseDate(createdText);
+
+                        if (createdDate) {
+                            // Kiszámoljuk, hány nap telt el a létrehozás óta
+                            const daysSinceCreation = daysBetween(today, createdDate);
+
+                            // Ha több mint 2 nap telt el, piros, egyébként halvány sárga
+                            if (daysSinceCreation > 2) {
+                                countdownCell.classList.add('no-due-date-old');
+                            } else {
+                                countdownCell.classList.add('no-due-date-recent');
+                            }
+                        }
+                    }
+                } else if (dateText) {
                     const dueDate = parseDate(dateText);
 
                     if (dueDate) {
@@ -241,20 +294,16 @@
                             cell.classList.add('soon'); // 1-3 nap közötti határidő
                         }
 
-                        // Keressük meg a megfelelő countdown cellát
-                        const countdownCell = cell.nextElementSibling;
-                        if (countdownCell && countdownCell.classList.contains('due-countdown')) {
-                            // Formázott szöveg a napok számáról
-                            countdownCell.textContent = formatDaysRemaining(dayDiff);
+                        // Formázott szöveg a napok számáról
+                        countdownCell.textContent = formatDaysRemaining(dayDiff);
 
-                            // Színezzük a countdown cellát is
-                            if (dayDiff <= 0) {
-                                countdownCell.classList.add('overdue');
-                            } else if (dayDiff <= 3) {
-                                countdownCell.classList.add('soon');
-                            } else {
-                                countdownCell.classList.add('future');
-                            }
+                        // Színezzük a countdown cellát is
+                        if (dayDiff <= 0) {
+                            countdownCell.classList.add('overdue');
+                        } else if (dayDiff <= 3) {
+                            countdownCell.classList.add('soon');
+                        } else {
+                            countdownCell.classList.add('future');
                         }
                     }
                 }
@@ -295,12 +344,14 @@
                             (node.classList && (
                                 node.classList.contains('summary') ||
                                 node.classList.contains('assignee') ||
-                                node.classList.contains('duedate')
+                                node.classList.contains('duedate') ||
+                                node.classList.contains('created')
                             )) ||
                             (node.querySelector && (
                                 node.querySelector('td.summary') ||
                                 node.querySelector('td.assignee') ||
                                 node.querySelector('td.duedate') ||
+                                node.querySelector('td.created') ||
                                 node.querySelector('tr.rowHeader') ||
                                 node.querySelector('#issuetable')
                             ))
