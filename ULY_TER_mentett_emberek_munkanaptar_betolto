@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         TER - Mentett emberek szabadságának megtekintése2
+// @name         TER - Mentett emberek szabadságának megtekintése2 (csoportok mentése)
 // @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  Gomb: Céges nyilvántartás tab kiválasztása és dátumok kitöltése (mai + 2 hét)
-// @author       Generated
+// @version      1.1
+// @description  Hozzáadott csoport/név kezelés + localStorage mentés; indítás csoport kiválasztással
+// @author       M3NT1
 // @match        https://ter.ulyssys.hu/ter/leave/lquery*
 // @grant        none
 // @run-at       document-ready
@@ -12,32 +12,27 @@
 (function () {
     'use strict';
 
-    // Konfiguráció
+    // --- KONFIG ---
     const CONFIG = {
-        DEBUG: true,
+        DEBUG: false,
         START_ID: 'form:tabView:startDate_input',
         END_ID: 'form:tabView:endDate_input',
         TAB_HREF: '#form:tabView:tab2',
         MAX_WAIT_MS: 7000,
-    RETRY_COUNT: 3,
-    NAMES_STORAGE_KEY: 'tm_ter_names',
-    GROUPS_STORAGE_KEY: 'tm_ter_name_groups',
-    DEFAULT_GROUP: 'Alap'
+        RETRY_COUNT: 3,
+        NAMES_STORAGE_KEY: 'tm_ter_names',           // backward compatibility (single list)
+        GROUPS_STORAGE_KEY: 'tm_ter_name_groups',   // stores { groupName: [name1,name2,...], ... }
+        DEFAULT_GROUP: 'Alap'
     };
 
-    function log(...args) {
-        if (CONFIG.DEBUG) console.log('[TER_tavollet_betolto]', ...args);
-    }
+    function log(...args) { if (CONFIG.DEBUG) console.log('[TER_tavollet_betolto]', ...args); }
 
+    // --- EREDTI FÜGGVÉNYEK (minimálisan módosítva) ---
     function waitForCondition(checkFn, timeout = CONFIG.MAX_WAIT_MS, interval = 150) {
         return new Promise((resolve, reject) => {
             const start = Date.now();
             (function poll() {
-                try {
-                    if (checkFn()) return resolve(true);
-                } catch (e) {
-                    // ignore
-                }
+                try { if (checkFn()) return resolve(true); } catch (e) {}
                 if (Date.now() - start > timeout) return reject(new Error('timeout'));
                 setTimeout(poll, interval);
             })();
@@ -51,34 +46,26 @@
         return `${yyyy}.${mm}.${dd}.`;
     }
 
-    function byId(id) {
-        return document.getElementById(id);
-    }
+    function byId(id) { return document.getElementById(id); }
 
     function triggerChange(el) {
         if (!el) return;
-        // jQuery preferred if available on the page
         if (window.jQuery) {
-            try { window.jQuery(el).val(el.value).trigger('change'); } catch(e) { /* fallback */ }
+            try { window.jQuery(el).val(el.value).trigger('change'); } catch (e) {}
         }
-        // Native events
         el.dispatchEvent(new Event('input', { bubbles: true }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
     }
 
-    // Detect if PrimeFaces status/loading dialog is visible
     function isStatusDialogVisible() {
         try {
             const dlg = document.getElementById('form:statusDialog');
             if (!dlg) return false;
             const cs = window.getComputedStyle(dlg);
-            // visible if display != 'none' and visibility != 'hidden' and aria-hidden != 'true'
             if (cs.display === 'none' || cs.visibility === 'hidden') return false;
             if (dlg.getAttribute('aria-hidden') === 'true') return false;
             return true;
-        } catch (e) {
-            return false;
-        }
+        } catch (e) { return false; }
     }
 
     function waitForStatusDialogHidden(timeout = CONFIG.MAX_WAIT_MS) {
@@ -86,294 +73,70 @@
     }
 
     async function clickTabAndWait() {
-        const anchor = document.querySelector(`a[href="${CONFIG.TAB_HREF}"]`);
+        const anchor = document.querySelector(`a[href=\"${CONFIG.TAB_HREF}\"]`);
         if (!anchor) throw new Error('Tab anchor not found');
         const li = anchor.closest('li');
         log('Clicking tab anchor', anchor, 'parent li:', li);
         anchor.click();
-        // Wait until tab li becomes active/selected
         await waitForCondition(() => {
-            try {
-                return li && (li.classList.contains('ui-tabs-selected') || li.classList.contains('ui-state-active') || li.getAttribute('aria-selected') === 'true');
-            } catch (e) { return false; }
+            try { return li && (li.classList.contains('ui-tabs-selected') || li.classList.contains('ui-state-active') || li.getAttribute('aria-selected') === 'true'); } catch (e) { return false; }
         }).catch(() => { log('Tab did not become active within timeout'); });
     }
 
     async function setDateWithValidation(inputId, valueStr) {
         const input = byId(inputId);
         if (!input) throw new Error(`Input not found: ${inputId}`);
-
         for (let attempt = 1; attempt <= CONFIG.RETRY_COUNT; attempt++) {
             log(`Setting ${inputId} attempt ${attempt} ->`, valueStr);
-            // set value
             try { input.value = valueStr; } catch (e) { log('Failed to set value directly', e); }
-            // trigger change events
             triggerChange(input);
-
-            // After change, PrimeFaces may show a status/loading dialog and then update fields.
-            // Wait for the status dialog (if appears) to hide, then validate the input value.
-            try {
-                await waitForStatusDialogHidden(CONFIG.MAX_WAIT_MS);
-            } catch (e) {
-                log('Status dialog did not hide within timeout (or did not appear)');
-            }
-
-            // Now wait until input.value reflects the desired value (or timeout)
+            try { await waitForStatusDialogHidden(CONFIG.MAX_WAIT_MS); } catch (e) { log('Status dialog wait failed/timeout'); }
             try {
                 await waitForCondition(() => input.value === valueStr, CONFIG.MAX_WAIT_MS);
-                // Give a small stabilization pause
                 await new Promise(r => setTimeout(r, 150));
                 log(`${inputId} successfully set to`, input.value);
                 return true;
             } catch (e) {
                 log(`${inputId} not updated yet (attempt ${attempt})`);
-                // small delay before retrying
                 await new Promise(r => setTimeout(r, 250));
             }
         }
-
         throw new Error(`Failed to set input ${inputId} to ${valueStr}`);
     }
 
-    function createControlButton() {
-        // Container for buttons
-        const container = document.createElement('div');
-        container.id = 'tm-ter-controls';
-        container.style.cssText = 'position:fixed;top:80px;right:18px;z-index:20000;display:flex;gap:6px;flex-direction:column;align-items:flex-end;';
-
-        // Main button
-        const btn = document.createElement('button');
-        btn.id = 'tm-ter-view-saved-people2';
-        btn.textContent = 'Mentett emberek szabadságának megtekintése2';
-        btn.style.cssText = 'padding:8px 12px;background:#205081;color:white;border:none;border-radius:4px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,0.2)';
-        btn.title = 'Kattintás: Céges nyilvántartás tab + mai dátum és 2 hét múlva beállítása';
-
-        // Apply names button
-        const applyNamesBtn = document.createElement('button');
-        applyNamesBtn.id = 'tm-ter-apply-names';
-        applyNamesBtn.textContent = 'Nevek alkalmazása';
-        applyNamesBtn.style.cssText = 'padding:6px 10px;background:#2d6ca2;color:white;border:none;border-radius:4px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,0.15);font-size:12px';
-        applyNamesBtn.title = 'A mentett nevek egymás után történő kitöltése és kiválasztása';
-
-        // Settings button
-        const settingsBtn = document.createElement('button');
-        settingsBtn.id = 'tm-ter-names-settings';
-        settingsBtn.textContent = '⚙';
-        settingsBtn.style.cssText = 'padding:6px 8px;background:#444;color:white;border:none;border-radius:4px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,0.15);font-size:13px';
-        settingsBtn.title = 'Név lista szerkesztése (vesszővel vagy új sorral elválasztva)';
-
-        // group selector
-        const groupSelect = document.createElement('select');
-        groupSelect.id = 'tm-ter-group-select';
-        groupSelect.style.cssText = 'padding:6px;border-radius:4px;border:1px solid #ccc;background:white;font-size:12px';
-        getGroupNames().forEach(g => {
-            const opt = document.createElement('option'); opt.value = g; opt.textContent = g; groupSelect.appendChild(opt);
-        });
-
-        // Insert elements into container
-        const topRow = document.createElement('div');
-        topRow.style.cssText = 'display:flex;gap:6px;align-items:center';
-        topRow.appendChild(groupSelect);
-        topRow.appendChild(settingsBtn);
-
-        container.appendChild(topRow);
-        container.appendChild(btn);
-        container.appendChild(applyNamesBtn);
-
-        // Try to insert into datatable header if exists, otherwise keep floating
-        const dtHeader = document.querySelector('.ui-datatable-header');
-        if (dtHeader) {
-            // style to match existing buttons area
-            const wrapper = document.createElement('div');
-            wrapper.className = 'tm-ter-button-wrapper';
-            wrapper.style.cssText = 'display:inline-flex;gap:6px;align-items:center;margin-left:10px;';
-            // make buttons look similar to ui-button
-            [btn, applyNamesBtn, settingsBtn].forEach(b => {
-                b.classList.add('ui-button', 'ui-widget', 'ui-state-default', 'ui-corner-all');
-                b.style.margin = '0 5px 0 0';
-                b.style.background = '';
-                b.style.boxShadow = 'none';
-                b.style.color = '';
-            });
-            wrapper.appendChild(btn);
-            wrapper.appendChild(applyNamesBtn);
-            wrapper.appendChild(settingsBtn);
-            dtHeader.appendChild(wrapper);
-        } else {
-            document.body.appendChild(container);
-        }
-
-        return { main: btn, applyNamesBtn, settingsBtn, groupSelect };
-    }
-
-    function readNamesFromStorage() {
-        const raw = localStorage.getItem(CONFIG.NAMES_STORAGE_KEY) || '';
-        if (!raw) return [];
-        // split by comma or newline
-        return raw.split(/\r?\n|,/).map(s => s.trim()).filter(Boolean);
-    }
-
-    function writeNamesToStorage(names) {
-        localStorage.setItem(CONFIG.NAMES_STORAGE_KEY, names.join('\n'));
-    }
-
-    function promptForNames() {
-        const current = localStorage.getItem(CONFIG.NAMES_STORAGE_KEY) || '';
-        const res = window.prompt('Add meg a neveket (vesszővel vagy új sorral elválasztva):', current);
-        if (res === null) return; // cancelled
-        const arr = res.split(/\r?\n|,/).map(s => s.trim()).filter(Boolean);
-        writeNamesToStorage(arr);
-        showToast('Nevek elmentve (' + arr.length + ')');
-    }
-
-    // Groups management
-    function readGroups() {
-        const raw = localStorage.getItem(CONFIG.GROUPS_STORAGE_KEY) || '{}';
-        try { return JSON.parse(raw); } catch (e) { return {}; }
-    }
-
-    // Attempt to repair malformed group objects saved previously.
-    // Some older/incorrect saves may have a key that is actually the pasted blob
-    // of names (contains commas) and an empty array as value. Detect that and
-    // reparse the blob into separate groups using the same logic as editGroupsPrompt.
-    function normalizeGroups(obj) {
-        try {
-            const keys = Object.keys(obj || {});
-            const malformed = keys.filter(k => (k && k.indexOf(',') !== -1) && Array.isArray(obj[k]) && obj[k].length === 0);
-            if (malformed.length === 0) return obj;
-
-            const combined = malformed.map(k => k.trim()).join('\n');
-            const newGroups = {};
-            const re = /([^:\r\n]+):([\s\S]*?)(?=(?:[^:\r\n]+:)|$)/g;
-            let m;
-            re.lastIndex = 0;
-            while ((m = re.exec(combined)) !== null) {
-                const name = (m[1] || '').trim();
-                const valsStr = (m[2] || '').trim();
-                const vals = valsStr.split(/,|\r?\n/).map(s => s.trim()).filter(Boolean);
-                if (name) newGroups[name] = vals;
-            }
-
-            // If regex didn't find any GroupName: pairs, treat the whole blob as default group
-            if (Object.keys(newGroups).length === 0) {
-                const vals = combined.split(/,|\r?\n/).map(s => s.trim()).filter(Boolean);
-                if (vals.length > 0) newGroups[CONFIG.DEFAULT_GROUP] = vals;
-            }
-
-            // merge with well-formed entries
-            keys.forEach(k => {
-                if (malformed.indexOf(k) === -1) newGroups[k] = obj[k];
-            });
-
-            // persist normalized form
-            writeGroups(newGroups);
-            return newGroups;
-        } catch (e) {
-            return obj;
-        }
-    }
-
-    function writeGroups(obj) {
-        localStorage.setItem(CONFIG.GROUPS_STORAGE_KEY, JSON.stringify(obj));
-    }
-
-    function editGroupsPrompt() {
-        const groups = readGroups();
-        const lines = Object.entries(groups).map(([k, v]) => `${k}:${v.join(',')}`);
-        const current = lines.join('\n');
-        const res = window.prompt('Groups (one per line in format GroupName:name1,name2,...). You can also paste multiple GroupName:... pairs on one line separated by commas.', current);
-        if (res === null) return;
-        const newGroups = {};
-
-        // If the user did not include any colon, treat the whole input as a single default group
-        if (!res.includes(':')) {
-            const vals = res.split(/,|\r?\n/).map(s => s.trim()).filter(Boolean);
-            if (vals.length > 0) newGroups[CONFIG.DEFAULT_GROUP] = vals;
-        } else {
-            // Regex to capture GroupName: values until the next GroupName: or end of string
-            const re = /([^:\r\n]+):([\s\S]*?)(?=(?:[^:\r\n]+:)|$)/g;
-            let m;
-            while ((m = re.exec(res)) !== null) {
-                const name = (m[1] || '').trim();
-                const valsStr = (m[2] || '').trim();
-                const vals = valsStr.split(/,|\r?\n/).map(s => s.trim()).filter(Boolean);
-                if (name) newGroups[name] = vals;
-            }
-        }
-
-        writeGroups(newGroups);
-        showToast('Csoportok elmentve (' + Object.keys(newGroups).length + ')');
-    }
-
-    function getGroupNames() {
-        const groups = readGroups();
-        const keys = Object.keys(groups);
-        if (keys.length === 0) return [CONFIG.DEFAULT_GROUP];
-        return keys;
-    }
-
-    function getNamesForGroup(group) {
-        const groups = readGroups();
-        return groups[group] || [];
-    }
-
-    function setNamesForGroup(group) {
-        const groups = readGroups();
-        const names = getNamesForGroup(group) || [];
-        writeNamesToStorage(names);
-        return names;
-    }
-
-    // Try to find autocomplete panel and items
-    function findAutocompletePanel() {
-    // panel id often contains j_idt263_panel
-    return document.querySelector('[id*="j_idt263_panel"], .ui-autocomplete-panel');
-    }
-
-    function findHiddenSelect() {
-        return document.querySelector('[id*="j_idt263_hinput"]');
-    }
+    // --- AUTOCOMPLETE / NÉV SELEKCIÓ (eredeti logika megtartva) ---
+    function findAutocompletePanel() { return document.querySelector('[id*="j_idt263_panel"], .ui-autocomplete-panel'); }
+    function findHiddenSelect() { return document.querySelector('[id*="j_idt263_hinput"]'); }
 
     async function selectAutocompleteName(name) {
+        // (A teljes eredeti megvalósítás változatlanul beilleszthető – itt röviden használjuk a meglévőt)
         log('Selecting autocomplete name:', name);
-
-        // locate input each time (DOM may change after selections)
         const findInput = () => {
             const wrapper = document.querySelector('[id*="j_idt263"]');
             if (!wrapper) return null;
             return wrapper.querySelector('input[type="text"]');
         };
-
         const input = findInput();
         if (!input) throw new Error('Autocomplete input not found');
 
-        // robustly open suggestion panel: try widget.search first, otherwise simulate typing
         let panel = null;
         const widget = (window.PF && typeof PF === 'function') ? PF('users') : null;
 
         for (let openAttempt = 1; openAttempt <= 4; openAttempt++) {
-            log('Open panel attempt', openAttempt);
-            try { input.focus(); input.value = name; } catch (e) { log('Failed to set autocomplete input', e); }
-
-            // try PF widget input + search if available
+            try { input.focus(); input.value = name; } catch (e) { log('set input failed', e); }
             try {
                 if (widget) {
-                    // some PF widgets expose panel as widget.panel
                     if (widget.input && typeof widget.input.val === 'function') widget.input.val(name);
                     if (typeof widget.search === 'function') widget.search(name);
                     if (widget.panel) panel = widget.panel.get(0);
                 }
-            } catch (e) { log('PF widget search attempt failed', e); }
-
-            // trigger native events
+            } catch (e) { log('widget search failed', e); }
             triggerChange(input);
-
-            // wait a bit longer for panel
             await new Promise(r => setTimeout(r, 260));
             panel = panel || findAutocompletePanel();
             if (panel && panel.querySelectorAll('.ui-autocomplete-item').length > 0) break;
 
-            // fallback: simulate typing character-by-character
+            // simulate typing
             try {
                 input.focus();
                 input.value = '';
@@ -385,36 +148,24 @@
                     input.dispatchEvent(new KeyboardEvent('keyup', { key: ch, bubbles: true }));
                     await new Promise(r => setTimeout(r, 60));
                 }
-            } catch (e) { log('Typing simulation failed', e); }
+            } catch (e) { log('typing failed', e); }
 
             await new Promise(r => setTimeout(r, 260));
             panel = panel || findAutocompletePanel();
             if (panel && panel.querySelectorAll('.ui-autocomplete-item').length > 0) break;
         }
 
-        // final check
-        if (!panel || panel.querySelectorAll('.ui-autocomplete-item').length === 0) {
-            throw new Error('Autocomplete panel did not appear');
-        }
+        if (!panel || panel.querySelectorAll('.ui-autocomplete-item').length === 0) throw new Error('Autocomplete panel did not appear');
 
-        if (!panel) throw new Error('Autocomplete panel did not appear');
-
-        // Try keyboard selection (ArrowDown + Enter) which many widgets accept
         try {
             input.focus();
-            const down = new KeyboardEvent('keydown', { key: 'ArrowDown', keyCode: 40, which: 40, bubbles: true });
-            input.dispatchEvent(down);
+            input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', keyCode: 40, which: 40, bubbles: true }));
             await new Promise(r => setTimeout(r, 80));
-            const enter = new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, which: 13, bubbles: true });
-            input.dispatchEvent(enter);
-        } catch (e) {
-            log('Keyboard selection failed', e);
-        }
+            input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+        } catch (e) { log('keyboard select failed', e); }
 
-        // wait a short moment and check if selection applied
         await new Promise(r => setTimeout(r, 150));
 
-        // verify selection (hidden select or token)
         const hselect = findHiddenSelect();
         const wrapperAfter = document.querySelector('[id*="j_idt263"]');
         const ok = await waitForCondition(() => {
@@ -430,12 +181,10 @@
         }, 700).catch(() => false);
 
         if (ok) {
-            log('Selected via keyboard:', name);
-            try { await waitForStatusDialogHidden(CONFIG.MAX_WAIT_MS); } catch (e) { /* ignore */ }
+            try { await waitForStatusDialogHidden(CONFIG.MAX_WAIT_MS); } catch (e) {}
             return true;
         }
 
-        // fallback: find item and click via mouse events
         const items = Array.from(panel.querySelectorAll('.ui-autocomplete-item'));
         let item = items.find(it => (it.getAttribute('data-item-label') || '').trim() === name);
         if (!item) item = items.find(it => it.textContent && it.textContent.includes(name));
@@ -454,12 +203,11 @@
                 });
             }
         } catch (e) {
-            log('Error dispatching mouse events on item', e);
-            try { item.click(); } catch (e2) { /* ignore */ }
+            log('mouse events failed', e);
+            try { item.click(); } catch (e2) {}
         }
 
-        // wait for confirmation
-        try { await waitForStatusDialogHidden(CONFIG.MAX_WAIT_MS); } catch (e) { /* ignore */ }
+        try { await waitForStatusDialogHidden(CONFIG.MAX_WAIT_MS); } catch (e) {}
         await waitForCondition(() => {
             const hs = findHiddenSelect();
             if (hs) {
@@ -472,7 +220,7 @@
                 return tokens.some(t => (t.textContent || '').trim().includes(name));
             }
             return false;
-        }, CONFIG.MAX_WAIT_MS).catch(() => { /* ignore */ });
+        }, CONFIG.MAX_WAIT_MS).catch(() => {});
 
         log('Selected autocomplete name done:', name);
         return true;
@@ -482,20 +230,13 @@
         for (let i = 0; i < names.length; i++) {
             const n = names[i];
             showToast(`Kiválasztás: ${n}`);
-            try {
-                await selectAutocompleteName(n);
-            } catch (e) {
-                log('Failed to select name', n, e);
-                showToast('Hiba: ' + n + ' -> ' + (e.message || e));
-                // continue with next name
-            }
-            // small pause between selections
+            try { await selectAutocompleteName(n); } catch (e) { log('Failed to select', n, e); showToast('Hiba: ' + n + ' → ' + (e.message || e)); }
             await new Promise(r => setTimeout(r, 350));
         }
         showToast('Nevek feldolgozva');
     }
 
-    function showToast(msg, ms = 4000) {
+    function showToast(msg, ms = 3000) {
         const n = document.createElement('div');
         n.textContent = msg;
         n.style.cssText = 'position:fixed;top:20px;right:20px;background:#14892c;color:#fff;padding:10px 14px;border-radius:4px;z-index:20001;font-size:13px';
@@ -503,55 +244,31 @@
         setTimeout(() => n.remove(), ms);
     }
 
+    // --- FŐ SEQUENCE (eredeti, változatlan) ---
     async function runSequence() {
         try {
-            // 1) click tab
             await clickTabAndWait();
-
-            // 2) compute dates
             const today = new Date();
             const end = new Date(today.getTime() + 14 * 24 * 60 * 60 * 1000);
             const startStr = formatDateForField(today);
             const endStr = formatDateForField(end);
 
-            // 3) set start date and validate
             await setDateWithValidation(CONFIG.START_ID, startStr);
-
-            // Wait a bit for PrimeFaces/ajax reactions to settle
             await new Promise(r => setTimeout(r, 400));
 
-            // 4) Try to set end date. PrimeFaces may overwrite end date based on start date or business rules.
-            // We'll attempt a small retry loop: if end gets overridden, reapply start+end up to CONFIG.RETRY_COUNT times.
             let success = false;
             for (let attempt = 1; attempt <= CONFIG.RETRY_COUNT; attempt++) {
-                log(`Attempting to set end date (attempt ${attempt}):`, endStr);
-                try {
-                    await setDateWithValidation(CONFIG.END_ID, endStr);
-                } catch (e) {
-                    log('Direct set of end date failed:', e.message || e);
-                }
-
-                // Wait for possible server-side overwrite to finish
+                try { await setDateWithValidation(CONFIG.END_ID, endStr); } catch (e) { log('set end failed', e); }
                 await new Promise(r => setTimeout(r, 500));
-
                 const endInput = document.getElementById(CONFIG.END_ID);
                 const currentEnd = endInput ? endInput.value : null;
                 log('Current end after set attempt:', currentEnd);
-
-                if (currentEnd === endStr) {
-                    success = true;
-                    break;
-                }
-
-                // If not matched, try reapplying start then end (some pages recalc end based on start)
-                log('End date was changed by the page, reapplying start+end');
-                try { await setDateWithValidation(CONFIG.START_ID, startStr); } catch (e) { log('Reapply start failed', e); }
+                if (currentEnd === endStr) { success = true; break; }
+                try { await setDateWithValidation(CONFIG.START_ID, startStr); } catch (e) { log('reapply start failed', e); }
                 await new Promise(r => setTimeout(r, 250));
             }
 
-            if (!success) {
-                throw new Error(`End date did not stabilize to ${endStr} after ${CONFIG.RETRY_COUNT} attempts`);
-            }
+            if (!success) throw new Error(`End date did not stabilize to ${endStr} after ${CONFIG.RETRY_COUNT} attempts`);
 
             showToast('Dátumok beállítva: ' + startStr + ' → ' + endStr);
             log('Sequence completed');
@@ -561,82 +278,310 @@
         }
     }
 
-    // Inicializálás: csak a megadott oldalakon
-    function initialize() {
-        try {
-            const btns = createControlButton();
-            // main button
-            btns.main.addEventListener('click', () => {
-                btns.main.disabled = true;
-                btns.main.textContent = 'Feldolgozás...';
-                runSequence().finally(() => {
-                    btns.main.disabled = false;
-                    btns.main.textContent = 'Mentett emberek szabadságának megtekintése2';
-                });
-            });
+    // --- CSOPORTOK / NÉVEK MENTÉSE (localStorage) ---
+    function readGroups() {
+        const raw = localStorage.getItem(CONFIG.GROUPS_STORAGE_KEY) || '{}';
+        try { return JSON.parse(raw); } catch (e) { return {}; }
+    }
+    function writeGroups(obj) { localStorage.setItem(CONFIG.GROUPS_STORAGE_KEY, JSON.stringify(obj)); }
 
-            // settings -> edit groups
-            btns.settingsBtn.addEventListener('click', () => {
-                editGroupsPrompt();
-                // refresh group select options
-                const opts = getGroupNames();
-                const sel = btns.groupSelect;
-                if (sel) {
-                    sel.innerHTML = '';
-                    opts.forEach(g => { const o = document.createElement('option'); o.value = g; o.textContent = g; sel.appendChild(o); });
-                }
-            });
-
-            // apply names (from selected group)
-            btns.applyNamesBtn.addEventListener('click', async () => {
-                const sel = btns.groupSelect;
-                const group = sel ? sel.value : CONFIG.DEFAULT_GROUP;
-                const names = getNamesForGroup(group);
-                if (!names || names.length === 0) {
-                    showToast('A kiválasztott csoport üres. Szerkesztés: ⚙');
-                    return;
-                }
-                // clear previous selections in the autocomplete (if any)
-                const hidden = findHiddenSelect();
-                if (hidden) { hidden.innerHTML = ''; }
-                // also remove tokens from wrapper
-                const wrapper = document.querySelector('[id*="j_idt263"]');
-                if (wrapper) {
-                    const tokens = Array.from(wrapper.querySelectorAll('li')).filter(li => !li.querySelector('input'));
-                    tokens.forEach(t => t.remove());
-                }
-
-                btns.applyNamesBtn.disabled = true;
-                await selectNamesSequentially(names);
-                btns.applyNamesBtn.disabled = false;
-            });
-
-            // group select change -> clear stored names and load group's names into storage for compatibility
-            if (btns.groupSelect) {
-                btns.groupSelect.addEventListener('change', (e) => {
-                    const g = e.target.value;
-                    // clear existing selections
-                    const hidden = findHiddenSelect(); if (hidden) hidden.innerHTML = '';
-                    const wrapper = document.querySelector('[id*="j_idt263"]'); if (wrapper) {
-                        const tokens = Array.from(wrapper.querySelectorAll('li')).filter(li => !li.querySelector('input')); tokens.forEach(t => t.remove());
-                    }
-                    // set names for group into storage to keep backward compatibility
-                    setNamesForGroup(g);
-                    showToast('Csoport kiválasztva: ' + g);
-                });
-            }
-
-            log('Gombok létrehozva');
-        } catch (e) {
-            log('Inicializálás hiba:', e);
+    // Visszafelé kompatibilitás: ha régi NAMES_STORAGE_KEY is van, becsomagoljuk alap csapatba
+    function migrateLegacyNames() {
+        const raw = localStorage.getItem(CONFIG.NAMES_STORAGE_KEY);
+        if (raw && !localStorage.getItem(CONFIG.GROUPS_STORAGE_KEY)) {
+            const arr = raw.split(/\r?\n|,/).map(s => s.trim()).filter(Boolean);
+            const g = {}; g[CONFIG.DEFAULT_GROUP] = arr;
+            writeGroups(g);
+            localStorage.removeItem(CONFIG.NAMES_STORAGE_KEY);
+            log('Migrated legacy names into groups');
         }
     }
 
-    // Várjuk, hogy a DOM betöltődjön, majd inicializálunk
+    // --- UI: létrehozás, betöltés, mentés, indítás ---
+    function createControlButton() {
+        // Ha már van, ne duplikáljuk
+        if (document.getElementById('tm-ter-controls')) return buildControlsReference();
+
+        // container
+        const container = document.createElement('div');
+        container.id = 'tm-ter-controls';
+        container.style.cssText = 'position:fixed;top:80px;right:18px;z-index:20000;display:flex;gap:6px;flex-direction:column;align-items:flex-end;font-family:Arial,Helvetica,sans-serif';
+
+        // group select
+        const groupSelect = document.createElement('select');
+        groupSelect.id = 'tm-ter-group-select';
+        groupSelect.style.cssText = 'padding:6px;border-radius:4px;border:1px solid #ccc;background:white;font-size:12px';
+        refreshGroupSelectOptions(groupSelect);
+
+        // settings (open manager)
+        const settingsBtn = document.createElement('button');
+        settingsBtn.id = 'tm-ter-names-settings';
+        settingsBtn.textContent = '⚙';
+        settingsBtn.title = 'Csoportok kezelése';
+        settingsBtn.style.cssText = 'padding:6px 8px;background:#444;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px';
+
+        // main run button (indítás)
+        const mainBtn = document.createElement('button');
+        mainBtn.id = 'tm-ter-view-saved-people2';
+        mainBtn.textContent = 'Indítás (kiválasztott csoport)';
+        mainBtn.style.cssText = 'padding:8px 12px;background:#205081;color:white;border:none;border-radius:4px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,0.2)';
+
+        // apply names button (kitölti a nevek mezőt a kódban lévő helyre, majd meghívja az alap apply)
+        const applyNamesBtn = document.createElement('button');
+        applyNamesBtn.id = 'tm-ter-apply-names';
+        applyNamesBtn.textContent = 'Nevek alkalmazása (kijelölt csoport)';
+        applyNamesBtn.style.cssText = 'padding:6px 10px;background:#2d6ca2;color:white;border:none;border-radius:4px;cursor:pointer;font-size:12px';
+
+        // top row
+        const topRow = document.createElement('div');
+        topRow.style.cssText = 'display:flex;gap:6px;align-items:center';
+        topRow.appendChild(groupSelect);
+        topRow.appendChild(settingsBtn);
+
+        container.appendChild(topRow);
+        container.appendChild(mainBtn);
+        container.appendChild(applyNamesBtn);
+
+        // insert into page if possible, else body
+        const dtHeader = document.querySelector('.ui-datatable-header');
+        if (dtHeader) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'tm-ter-button-wrapper';
+            wrapper.style.cssText = 'display:inline-flex;gap:6px;align-items:center;margin-left:10px;';
+            [mainBtn, applyNamesBtn, settingsBtn].forEach(b => {
+                b.classList.add('ui-button', 'ui-widget', 'ui-state-default', 'ui-corner-all');
+                b.style.margin = '0 5px 0 0';
+                b.style.background = '';
+                b.style.boxShadow = 'none';
+            });
+            wrapper.appendChild(mainBtn); wrapper.appendChild(applyNamesBtn); wrapper.appendChild(settingsBtn);
+            dtHeader.appendChild(wrapper);
+            // also add hidden select for reference to our container
+            dtHeader.appendChild(container);
+        } else {
+            document.body.appendChild(container);
+        }
+
+        // események
+        settingsBtn.addEventListener('click', openGroupManagerDialog);
+
+        mainBtn.addEventListener('click', async () => {
+            mainBtn.disabled = true;
+            mainBtn.textContent = 'Futtatás...';
+            try {
+                // beállítjuk az aktuális csoport neveit a régi storage helyre kompatibilitásért
+                const sel = document.getElementById('tm-ter-group-select');
+                const group = sel ? sel.value : CONFIG.DEFAULT_GROUP;
+                const names = readGroups()[group] || [];
+                // írjuk át a NAMES_STORAGE_KEY-t (ahogy a régi kód használta)
+                localStorage.setItem(CONFIG.NAMES_STORAGE_KEY, names.join('\n'));
+                // majd meghívjuk az eredeti runSequence-t és utána a név kitöltést
+                await runSequence();
+                // ha szeretnéd, indíthatjuk a névkitöltést is automatikusan:
+                if (names.length > 0) {
+                    await selectNamesSequentially(names);
+                }
+            } catch (e) { log('main run failed', e); showToast('Hiba: ' + (e.message || e)); }
+            mainBtn.disabled = false;
+            mainBtn.textContent = 'Indítás (kiválasztott csoport)';
+        });
+
+        applyNamesBtn.addEventListener('click', async () => {
+            const sel = document.getElementById('tm-ter-group-select');
+            const group = sel ? sel.value : CONFIG.DEFAULT_GROUP;
+            const groups = readGroups();
+            const names = groups[group] || [];
+            if (!names || names.length === 0) { showToast('A kiválasztott csoport üres vagy nem létezik'); return; }
+            // kompatibilitás: írjuk felül a NAMES_STORAGE_KEY-et a régi kód számára
+            localStorage.setItem(CONFIG.NAMES_STORAGE_KEY, names.join('\n'));
+            // majd alkalmazzuk a neveket (az eredeti apply logikát használva)
+            try {
+                await selectNamesSequentially(names);
+            } catch (e) { log('apply names failed', e); showToast('Hiba a nevek alkalmazásakor: ' + (e.message || e)); }
+        });
+
+        // amikor a select változik, frissítjük a helyi kompatibilis storage-t is és mutatunk üzenetet
+        groupSelect.addEventListener('change', (e) => {
+            const g = e.target.value;
+            const groups = readGroups();
+            const names = groups[g] || [];
+            localStorage.setItem(CONFIG.NAMES_STORAGE_KEY, names.join('\n'));
+            showToast('Csoport kiválasztva: ' + g, 1500);
+        });
+
+        return { container, main: mainBtn, applyNamesBtn, settingsBtn, groupSelect };
+    }
+
+    // helper ha már van: visszaad referenciákat
+    function buildControlsReference() {
+        return {
+            container: document.getElementById('tm-ter-controls'),
+            main: document.getElementById('tm-ter-view-saved-people2'),
+            applyNamesBtn: document.getElementById('tm-ter-apply-names'),
+            settingsBtn: document.getElementById('tm-ter-names-settings'),
+            groupSelect: document.getElementById('tm-ter-group-select')
+        };
+    }
+
+    function refreshGroupSelectOptions(selectEl) {
+        // Ha nincs átadva select, keressük meg DOM-ból
+        let sel = selectEl || document.getElementById('tm-ter-group-select');
+        if (!sel) return;
+        const groups = readGroups();
+        const keys = Object.keys(groups);
+        sel.innerHTML = '';
+        if (keys.length === 0) {
+            const opt = document.createElement('option'); opt.value = CONFIG.DEFAULT_GROUP; opt.textContent = CONFIG.DEFAULT_GROUP; sel.appendChild(opt);
+        } else {
+            keys.forEach(k => { const opt = document.createElement('option'); opt.value = k; opt.textContent = k; sel.appendChild(opt); });
+        }
+    }
+
+    // --- csoportkezelő dialógus ---
+    function openGroupManagerDialog() {
+        // ha már van dialog, fókuszáljuk
+        if (document.getElementById('tm-group-manager')) {
+            document.getElementById('tm-group-manager').style.display = 'block';
+            return;
+        }
+
+        const dlg = document.createElement('div');
+        dlg.id = 'tm-group-manager';
+        dlg.style.cssText = 'position:fixed;top:60px;right:60px;background:#fff;border:1px solid #ccc;padding:12px;z-index:20002;width:360px;max-height:70vh;overflow:auto;font-family:Arial,Helvetica,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,0.2)';
+
+        const title = document.createElement('h3'); title.textContent = 'Csoportok és nevek kezelése'; title.style.marginTop = '0';
+        dlg.appendChild(title);
+
+        // input + gombok új csoport létrehozáshoz
+        const addRow = document.createElement('div'); addRow.style.cssText = 'display:flex;gap:6px;margin-bottom:8px';
+        const newGroupInput = document.createElement('input'); newGroupInput.placeholder = 'Új csoport neve...'; newGroupInput.style.cssText = 'flex:1;padding:6px';
+        const addGroupBtn = document.createElement('button'); addGroupBtn.textContent = 'Csoport +'; addGroupBtn.style.cssText = 'padding:6px';
+        addRow.appendChild(newGroupInput); addRow.appendChild(addGroupBtn);
+        dlg.appendChild(addRow);
+
+        // konténer a csoportok listájának
+        const groupsList = document.createElement('div');
+        dlg.appendChild(groupsList);
+
+        // gomb bezáráshoz
+        const footer = document.createElement('div'); footer.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;margin-top:10px';
+        const saveBtn = document.createElement('button'); saveBtn.textContent = 'Mentés'; saveBtn.style.cssText = 'padding:6px 10px;background:#205081;color:white;border:none;border-radius:4px';
+        const closeBtn = document.createElement('button'); closeBtn.textContent = 'Bezár'; closeBtn.style.cssText = 'padding:6px 10px';
+        footer.appendChild(saveBtn); footer.appendChild(closeBtn);
+        dlg.appendChild(footer);
+
+        // lista render
+        function renderGroupsEditor() {
+            groupsList.innerHTML = '';
+            const groups = readGroups();
+            const keys = Object.keys(groups);
+            if (keys.length === 0) {
+                const p = document.createElement('p'); p.textContent = 'Nincsenek csoportok. Hozz létre egyet!'; groupsList.appendChild(p);
+            }
+            keys.forEach(g => {
+                const card = document.createElement('div'); card.style.cssText = 'border:1px solid #e0e0e0;padding:8px;margin-bottom:8px;border-radius:4px;background:#fafafa';
+                const hdr = document.createElement('div'); hdr.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:6px';
+                const nameInput = document.createElement('input'); nameInput.value = g; nameInput.style.cssText = 'flex:1;padding:6px';
+                const renameBtn = document.createElement('button'); renameBtn.textContent = 'Átnevez'; renameBtn.style.cssText = 'padding:6px';
+                const deleteGroupBtn = document.createElement('button'); deleteGroupBtn.textContent = 'Csoport törlése'; deleteGroupBtn.style.cssText = 'padding:6px;color:#fff;background:#c0392b;border:none;border-radius:3px';
+                hdr.appendChild(nameInput); hdr.appendChild(renameBtn); hdr.appendChild(deleteGroupBtn);
+                card.appendChild(hdr);
+
+                // nevek textarea (egyszerre több név is beírható, soronként)
+                const namesArea = document.createElement('textarea');
+                namesArea.style.cssText = 'width:100%;height:80px;padding:6px;font-family:monospace';
+                namesArea.placeholder = 'Írd be a neveket, egy név soronként';
+                namesArea.value = (groups[g] || []).join('\n');
+                card.appendChild(namesArea);
+
+                // gombok sor: mentés névhez, törlés név
+                const row = document.createElement('div'); row.style.cssText = 'display:flex;gap:6px;margin-top:6px;justify-content:flex-end';
+                const saveNamesBtn = document.createElement('button'); saveNamesBtn.textContent = 'Nevek mentése'; saveNamesBtn.style.cssText = 'padding:6px;background:#2d6ca2;color:white;border:none;border-radius:3px';
+                const loadNamesBtn = document.createElement('button'); loadNamesBtn.textContent = 'Betöltés (kódhoz)'; loadNamesBtn.title = 'A nevek beírása a kód által használt helyre (local compatibility)'; loadNamesBtn.style.cssText = 'padding:6px';
+                row.appendChild(loadNamesBtn); row.appendChild(saveNamesBtn);
+                card.appendChild(row);
+
+                // események
+                renameBtn.addEventListener('click', () => {
+                    const newName = nameInput.value.trim();
+                    if (!newName) { alert('A csoport neve nem lehet üres'); return; }
+                    if (newName === g) { alert('Ugyanaz a név, nincs változás'); return; }
+                    const groupsObj = readGroups();
+                    if (groupsObj[newName]) { alert('Már létezik ilyen nevű csoport'); return; }
+                    groupsObj[newName] = groupsObj[g];
+                    delete groupsObj[g];
+                    writeGroups(groupsObj);
+                    refreshGroupSelectOptions();
+                    renderGroupsEditor();
+                });
+
+                deleteGroupBtn.addEventListener('click', () => {
+                    if (!confirm(`Biztosan törlöd a "${g}" csoportot?`)) return;
+                    const groupsObj = readGroups();
+                    delete groupsObj[g];
+                    writeGroups(groupsObj);
+                    refreshGroupSelectOptions();
+                    renderGroupsEditor();
+                });
+
+                saveNamesBtn.addEventListener('click', () => {
+                    const txt = namesArea.value || '';
+                    const arr = txt.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+                    const groupsObj = readGroups();
+                    groupsObj[g] = arr;
+                    writeGroups(groupsObj);
+                    refreshGroupSelectOptions();
+                    showToast('Nevek elmentve (' + arr.length + ')');
+                });
+
+                loadNamesBtn.addEventListener('click', () => {
+                    const groupsObj = readGroups();
+                    const arr = groupsObj[g] || [];
+                    // ide írjuk a kompatibilis régi NAMES_STORAGE_KEY helyre
+                    localStorage.setItem(CONFIG.NAMES_STORAGE_KEY, arr.join('\n'));
+                    showToast('Nevek betöltve a kód által használt helyre (' + arr.length + ')');
+                });
+
+                groupsList.appendChild(card);
+            });
+        }
+
+        // új csoport hozzáadása
+        addGroupBtn.addEventListener('click', () => {
+            const name = newGroupInput.value.trim();
+            if (!name) { alert('Adj meg egy csoport nevet'); return; }
+            const groupsObj = readGroups();
+            if (groupsObj[name]) { alert('Már létezik ilyen csoport'); return; }
+            groupsObj[name] = [];
+            writeGroups(groupsObj);
+            newGroupInput.value = '';
+            refreshGroupSelectOptions();
+            renderGroupsEditor();
+        });
+
+        saveBtn.addEventListener('click', () => {
+            // minden mező mentése már külön gombokra van kötve, de itt frissítjük a selectet és bezárjuk
+            refreshGroupSelectOptions();
+            dlg.style.display = 'none';
+            showToast('Csoportok mentve');
+        });
+
+        closeBtn.addEventListener('click', () => { dlg.style.display = 'none'; });
+
+        // initial render
+        renderGroupsEditor();
+
+        document.body.appendChild(dlg);
+    }
+
+    // --- MIGRÁLÁS régi formátumból (ha kell) ---
+    migrateLegacyNames();
+
+    // --- INICIALIZÁLÁS ---
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initialize);
+        document.addEventListener('DOMContentLoaded', () => { createControlButton(); });
     } else {
-        initialize();
+        createControlButton();
     }
 
 })();
