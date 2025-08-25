@@ -1,0 +1,642 @@
+// ==UserScript==
+// @name         TER - Mentett emberek szabadságának megtekintése2
+// @namespace    http://tampermonkey.net/
+// @version      1.0
+// @description  Gomb: Céges nyilvántartás tab kiválasztása és dátumok kitöltése (mai + 2 hét)
+// @author       Generated
+// @match        https://ter.ulyssys.hu/ter/leave/lquery*
+// @grant        none
+// @run-at       document-ready
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    // Konfiguráció
+    const CONFIG = {
+        DEBUG: true,
+        START_ID: 'form:tabView:startDate_input',
+        END_ID: 'form:tabView:endDate_input',
+        TAB_HREF: '#form:tabView:tab2',
+        MAX_WAIT_MS: 7000,
+    RETRY_COUNT: 3,
+    NAMES_STORAGE_KEY: 'tm_ter_names',
+    GROUPS_STORAGE_KEY: 'tm_ter_name_groups',
+    DEFAULT_GROUP: 'Alap'
+    };
+
+    function log(...args) {
+        if (CONFIG.DEBUG) console.log('[TER_tavollet_betolto]', ...args);
+    }
+
+    function waitForCondition(checkFn, timeout = CONFIG.MAX_WAIT_MS, interval = 150) {
+        return new Promise((resolve, reject) => {
+            const start = Date.now();
+            (function poll() {
+                try {
+                    if (checkFn()) return resolve(true);
+                } catch (e) {
+                    // ignore
+                }
+                if (Date.now() - start > timeout) return reject(new Error('timeout'));
+                setTimeout(poll, interval);
+            })();
+        });
+    }
+
+    function formatDateForField(d) {
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        return `${yyyy}.${mm}.${dd}.`;
+    }
+
+    function byId(id) {
+        return document.getElementById(id);
+    }
+
+    function triggerChange(el) {
+        if (!el) return;
+        // jQuery preferred if available on the page
+        if (window.jQuery) {
+            try { window.jQuery(el).val(el.value).trigger('change'); } catch(e) { /* fallback */ }
+        }
+        // Native events
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    // Detect if PrimeFaces status/loading dialog is visible
+    function isStatusDialogVisible() {
+        try {
+            const dlg = document.getElementById('form:statusDialog');
+            if (!dlg) return false;
+            const cs = window.getComputedStyle(dlg);
+            // visible if display != 'none' and visibility != 'hidden' and aria-hidden != 'true'
+            if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+            if (dlg.getAttribute('aria-hidden') === 'true') return false;
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function waitForStatusDialogHidden(timeout = CONFIG.MAX_WAIT_MS) {
+        return waitForCondition(() => !isStatusDialogVisible(), timeout, 150);
+    }
+
+    async function clickTabAndWait() {
+        const anchor = document.querySelector(`a[href="${CONFIG.TAB_HREF}"]`);
+        if (!anchor) throw new Error('Tab anchor not found');
+        const li = anchor.closest('li');
+        log('Clicking tab anchor', anchor, 'parent li:', li);
+        anchor.click();
+        // Wait until tab li becomes active/selected
+        await waitForCondition(() => {
+            try {
+                return li && (li.classList.contains('ui-tabs-selected') || li.classList.contains('ui-state-active') || li.getAttribute('aria-selected') === 'true');
+            } catch (e) { return false; }
+        }).catch(() => { log('Tab did not become active within timeout'); });
+    }
+
+    async function setDateWithValidation(inputId, valueStr) {
+        const input = byId(inputId);
+        if (!input) throw new Error(`Input not found: ${inputId}`);
+
+        for (let attempt = 1; attempt <= CONFIG.RETRY_COUNT; attempt++) {
+            log(`Setting ${inputId} attempt ${attempt} ->`, valueStr);
+            // set value
+            try { input.value = valueStr; } catch (e) { log('Failed to set value directly', e); }
+            // trigger change events
+            triggerChange(input);
+
+            // After change, PrimeFaces may show a status/loading dialog and then update fields.
+            // Wait for the status dialog (if appears) to hide, then validate the input value.
+            try {
+                await waitForStatusDialogHidden(CONFIG.MAX_WAIT_MS);
+            } catch (e) {
+                log('Status dialog did not hide within timeout (or did not appear)');
+            }
+
+            // Now wait until input.value reflects the desired value (or timeout)
+            try {
+                await waitForCondition(() => input.value === valueStr, CONFIG.MAX_WAIT_MS);
+                // Give a small stabilization pause
+                await new Promise(r => setTimeout(r, 150));
+                log(`${inputId} successfully set to`, input.value);
+                return true;
+            } catch (e) {
+                log(`${inputId} not updated yet (attempt ${attempt})`);
+                // small delay before retrying
+                await new Promise(r => setTimeout(r, 250));
+            }
+        }
+
+        throw new Error(`Failed to set input ${inputId} to ${valueStr}`);
+    }
+
+    function createControlButton() {
+        // Container for buttons
+        const container = document.createElement('div');
+        container.id = 'tm-ter-controls';
+        container.style.cssText = 'position:fixed;top:80px;right:18px;z-index:20000;display:flex;gap:6px;flex-direction:column;align-items:flex-end;';
+
+        // Main button
+        const btn = document.createElement('button');
+        btn.id = 'tm-ter-view-saved-people2';
+        btn.textContent = 'Mentett emberek szabadságának megtekintése2';
+        btn.style.cssText = 'padding:8px 12px;background:#205081;color:white;border:none;border-radius:4px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,0.2)';
+        btn.title = 'Kattintás: Céges nyilvántartás tab + mai dátum és 2 hét múlva beállítása';
+
+        // Apply names button
+        const applyNamesBtn = document.createElement('button');
+        applyNamesBtn.id = 'tm-ter-apply-names';
+        applyNamesBtn.textContent = 'Nevek alkalmazása';
+        applyNamesBtn.style.cssText = 'padding:6px 10px;background:#2d6ca2;color:white;border:none;border-radius:4px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,0.15);font-size:12px';
+        applyNamesBtn.title = 'A mentett nevek egymás után történő kitöltése és kiválasztása';
+
+        // Settings button
+        const settingsBtn = document.createElement('button');
+        settingsBtn.id = 'tm-ter-names-settings';
+        settingsBtn.textContent = '⚙';
+        settingsBtn.style.cssText = 'padding:6px 8px;background:#444;color:white;border:none;border-radius:4px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,0.15);font-size:13px';
+        settingsBtn.title = 'Név lista szerkesztése (vesszővel vagy új sorral elválasztva)';
+
+        // group selector
+        const groupSelect = document.createElement('select');
+        groupSelect.id = 'tm-ter-group-select';
+        groupSelect.style.cssText = 'padding:6px;border-radius:4px;border:1px solid #ccc;background:white;font-size:12px';
+        getGroupNames().forEach(g => {
+            const opt = document.createElement('option'); opt.value = g; opt.textContent = g; groupSelect.appendChild(opt);
+        });
+
+        // Insert elements into container
+        const topRow = document.createElement('div');
+        topRow.style.cssText = 'display:flex;gap:6px;align-items:center';
+        topRow.appendChild(groupSelect);
+        topRow.appendChild(settingsBtn);
+
+        container.appendChild(topRow);
+        container.appendChild(btn);
+        container.appendChild(applyNamesBtn);
+
+        // Try to insert into datatable header if exists, otherwise keep floating
+        const dtHeader = document.querySelector('.ui-datatable-header');
+        if (dtHeader) {
+            // style to match existing buttons area
+            const wrapper = document.createElement('div');
+            wrapper.className = 'tm-ter-button-wrapper';
+            wrapper.style.cssText = 'display:inline-flex;gap:6px;align-items:center;margin-left:10px;';
+            // make buttons look similar to ui-button
+            [btn, applyNamesBtn, settingsBtn].forEach(b => {
+                b.classList.add('ui-button', 'ui-widget', 'ui-state-default', 'ui-corner-all');
+                b.style.margin = '0 5px 0 0';
+                b.style.background = '';
+                b.style.boxShadow = 'none';
+                b.style.color = '';
+            });
+            wrapper.appendChild(btn);
+            wrapper.appendChild(applyNamesBtn);
+            wrapper.appendChild(settingsBtn);
+            dtHeader.appendChild(wrapper);
+        } else {
+            document.body.appendChild(container);
+        }
+
+        return { main: btn, applyNamesBtn, settingsBtn, groupSelect };
+    }
+
+    function readNamesFromStorage() {
+        const raw = localStorage.getItem(CONFIG.NAMES_STORAGE_KEY) || '';
+        if (!raw) return [];
+        // split by comma or newline
+        return raw.split(/\r?\n|,/).map(s => s.trim()).filter(Boolean);
+    }
+
+    function writeNamesToStorage(names) {
+        localStorage.setItem(CONFIG.NAMES_STORAGE_KEY, names.join('\n'));
+    }
+
+    function promptForNames() {
+        const current = localStorage.getItem(CONFIG.NAMES_STORAGE_KEY) || '';
+        const res = window.prompt('Add meg a neveket (vesszővel vagy új sorral elválasztva):', current);
+        if (res === null) return; // cancelled
+        const arr = res.split(/\r?\n|,/).map(s => s.trim()).filter(Boolean);
+        writeNamesToStorage(arr);
+        showToast('Nevek elmentve (' + arr.length + ')');
+    }
+
+    // Groups management
+    function readGroups() {
+        const raw = localStorage.getItem(CONFIG.GROUPS_STORAGE_KEY) || '{}';
+        try { return JSON.parse(raw); } catch (e) { return {}; }
+    }
+
+    // Attempt to repair malformed group objects saved previously.
+    // Some older/incorrect saves may have a key that is actually the pasted blob
+    // of names (contains commas) and an empty array as value. Detect that and
+    // reparse the blob into separate groups using the same logic as editGroupsPrompt.
+    function normalizeGroups(obj) {
+        try {
+            const keys = Object.keys(obj || {});
+            const malformed = keys.filter(k => (k && k.indexOf(',') !== -1) && Array.isArray(obj[k]) && obj[k].length === 0);
+            if (malformed.length === 0) return obj;
+
+            const combined = malformed.map(k => k.trim()).join('\n');
+            const newGroups = {};
+            const re = /([^:\r\n]+):([\s\S]*?)(?=(?:[^:\r\n]+:)|$)/g;
+            let m;
+            re.lastIndex = 0;
+            while ((m = re.exec(combined)) !== null) {
+                const name = (m[1] || '').trim();
+                const valsStr = (m[2] || '').trim();
+                const vals = valsStr.split(/,|\r?\n/).map(s => s.trim()).filter(Boolean);
+                if (name) newGroups[name] = vals;
+            }
+
+            // If regex didn't find any GroupName: pairs, treat the whole blob as default group
+            if (Object.keys(newGroups).length === 0) {
+                const vals = combined.split(/,|\r?\n/).map(s => s.trim()).filter(Boolean);
+                if (vals.length > 0) newGroups[CONFIG.DEFAULT_GROUP] = vals;
+            }
+
+            // merge with well-formed entries
+            keys.forEach(k => {
+                if (malformed.indexOf(k) === -1) newGroups[k] = obj[k];
+            });
+
+            // persist normalized form
+            writeGroups(newGroups);
+            return newGroups;
+        } catch (e) {
+            return obj;
+        }
+    }
+
+    function writeGroups(obj) {
+        localStorage.setItem(CONFIG.GROUPS_STORAGE_KEY, JSON.stringify(obj));
+    }
+
+    function editGroupsPrompt() {
+        const groups = readGroups();
+        const lines = Object.entries(groups).map(([k, v]) => `${k}:${v.join(',')}`);
+        const current = lines.join('\n');
+        const res = window.prompt('Groups (one per line in format GroupName:name1,name2,...). You can also paste multiple GroupName:... pairs on one line separated by commas.', current);
+        if (res === null) return;
+        const newGroups = {};
+
+        // If the user did not include any colon, treat the whole input as a single default group
+        if (!res.includes(':')) {
+            const vals = res.split(/,|\r?\n/).map(s => s.trim()).filter(Boolean);
+            if (vals.length > 0) newGroups[CONFIG.DEFAULT_GROUP] = vals;
+        } else {
+            // Regex to capture GroupName: values until the next GroupName: or end of string
+            const re = /([^:\r\n]+):([\s\S]*?)(?=(?:[^:\r\n]+:)|$)/g;
+            let m;
+            while ((m = re.exec(res)) !== null) {
+                const name = (m[1] || '').trim();
+                const valsStr = (m[2] || '').trim();
+                const vals = valsStr.split(/,|\r?\n/).map(s => s.trim()).filter(Boolean);
+                if (name) newGroups[name] = vals;
+            }
+        }
+
+        writeGroups(newGroups);
+        showToast('Csoportok elmentve (' + Object.keys(newGroups).length + ')');
+    }
+
+    function getGroupNames() {
+        const groups = readGroups();
+        const keys = Object.keys(groups);
+        if (keys.length === 0) return [CONFIG.DEFAULT_GROUP];
+        return keys;
+    }
+
+    function getNamesForGroup(group) {
+        const groups = readGroups();
+        return groups[group] || [];
+    }
+
+    function setNamesForGroup(group) {
+        const groups = readGroups();
+        const names = getNamesForGroup(group) || [];
+        writeNamesToStorage(names);
+        return names;
+    }
+
+    // Try to find autocomplete panel and items
+    function findAutocompletePanel() {
+    // panel id often contains j_idt263_panel
+    return document.querySelector('[id*="j_idt263_panel"], .ui-autocomplete-panel');
+    }
+
+    function findHiddenSelect() {
+        return document.querySelector('[id*="j_idt263_hinput"]');
+    }
+
+    async function selectAutocompleteName(name) {
+        log('Selecting autocomplete name:', name);
+
+        // locate input each time (DOM may change after selections)
+        const findInput = () => {
+            const wrapper = document.querySelector('[id*="j_idt263"]');
+            if (!wrapper) return null;
+            return wrapper.querySelector('input[type="text"]');
+        };
+
+        const input = findInput();
+        if (!input) throw new Error('Autocomplete input not found');
+
+        // robustly open suggestion panel: try widget.search first, otherwise simulate typing
+        let panel = null;
+        const widget = (window.PF && typeof PF === 'function') ? PF('users') : null;
+
+        for (let openAttempt = 1; openAttempt <= 4; openAttempt++) {
+            log('Open panel attempt', openAttempt);
+            try { input.focus(); input.value = name; } catch (e) { log('Failed to set autocomplete input', e); }
+
+            // try PF widget input + search if available
+            try {
+                if (widget) {
+                    // some PF widgets expose panel as widget.panel
+                    if (widget.input && typeof widget.input.val === 'function') widget.input.val(name);
+                    if (typeof widget.search === 'function') widget.search(name);
+                    if (widget.panel) panel = widget.panel.get(0);
+                }
+            } catch (e) { log('PF widget search attempt failed', e); }
+
+            // trigger native events
+            triggerChange(input);
+
+            // wait a bit longer for panel
+            await new Promise(r => setTimeout(r, 260));
+            panel = panel || findAutocompletePanel();
+            if (panel && panel.querySelectorAll('.ui-autocomplete-item').length > 0) break;
+
+            // fallback: simulate typing character-by-character
+            try {
+                input.focus();
+                input.value = '';
+                for (let i = 0; i < name.length; i++) {
+                    const ch = name.charAt(i);
+                    input.value += ch;
+                    triggerChange(input);
+                    input.dispatchEvent(new KeyboardEvent('keydown', { key: ch, bubbles: true }));
+                    input.dispatchEvent(new KeyboardEvent('keyup', { key: ch, bubbles: true }));
+                    await new Promise(r => setTimeout(r, 60));
+                }
+            } catch (e) { log('Typing simulation failed', e); }
+
+            await new Promise(r => setTimeout(r, 260));
+            panel = panel || findAutocompletePanel();
+            if (panel && panel.querySelectorAll('.ui-autocomplete-item').length > 0) break;
+        }
+
+        // final check
+        if (!panel || panel.querySelectorAll('.ui-autocomplete-item').length === 0) {
+            throw new Error('Autocomplete panel did not appear');
+        }
+
+        if (!panel) throw new Error('Autocomplete panel did not appear');
+
+        // Try keyboard selection (ArrowDown + Enter) which many widgets accept
+        try {
+            input.focus();
+            const down = new KeyboardEvent('keydown', { key: 'ArrowDown', keyCode: 40, which: 40, bubbles: true });
+            input.dispatchEvent(down);
+            await new Promise(r => setTimeout(r, 80));
+            const enter = new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, which: 13, bubbles: true });
+            input.dispatchEvent(enter);
+        } catch (e) {
+            log('Keyboard selection failed', e);
+        }
+
+        // wait a short moment and check if selection applied
+        await new Promise(r => setTimeout(r, 150));
+
+        // verify selection (hidden select or token)
+        const hselect = findHiddenSelect();
+        const wrapperAfter = document.querySelector('[id*="j_idt263"]');
+        const ok = await waitForCondition(() => {
+            if (hselect) {
+                const opts = Array.from(hselect.options || []);
+                if (opts.some(o => (o.text || o.label || '').includes(name))) return true;
+            }
+            if (wrapperAfter) {
+                const tokens = Array.from(wrapperAfter.querySelectorAll('li')).filter(li => !li.querySelector('input'));
+                if (tokens.some(t => (t.textContent || '').trim().includes(name))) return true;
+            }
+            return false;
+        }, 700).catch(() => false);
+
+        if (ok) {
+            log('Selected via keyboard:', name);
+            try { await waitForStatusDialogHidden(CONFIG.MAX_WAIT_MS); } catch (e) { /* ignore */ }
+            return true;
+        }
+
+        // fallback: find item and click via mouse events
+        const items = Array.from(panel.querySelectorAll('.ui-autocomplete-item'));
+        let item = items.find(it => (it.getAttribute('data-item-label') || '').trim() === name);
+        if (!item) item = items.find(it => it.textContent && it.textContent.includes(name));
+        if (!item) throw new Error('Autocomplete item not found for: ' + name);
+
+        try {
+            ['mousemove', 'mouseover', 'mousedown', 'mouseup', 'click'].forEach(type => {
+                const evt = new MouseEvent(type, { bubbles: true, cancelable: true, view: window });
+                item.dispatchEvent(evt);
+            });
+            const inner = item.querySelector('span') || item.firstChild;
+            if (inner && inner !== item) {
+                ['mousemove', 'mouseover', 'mousedown', 'mouseup', 'click'].forEach(type => {
+                    const evt = new MouseEvent(type, { bubbles: true, cancelable: true, view: window });
+                    inner.dispatchEvent(evt);
+                });
+            }
+        } catch (e) {
+            log('Error dispatching mouse events on item', e);
+            try { item.click(); } catch (e2) { /* ignore */ }
+        }
+
+        // wait for confirmation
+        try { await waitForStatusDialogHidden(CONFIG.MAX_WAIT_MS); } catch (e) { /* ignore */ }
+        await waitForCondition(() => {
+            const hs = findHiddenSelect();
+            if (hs) {
+                const opts = Array.from(hs.options || []);
+                if (opts.some(o => (o.text || o.label || '').includes(name))) return true;
+            }
+            const w = document.querySelector('[id*="j_idt263"]');
+            if (w) {
+                const tokens = Array.from(w.querySelectorAll('li')).filter(li => !li.querySelector('input'));
+                return tokens.some(t => (t.textContent || '').trim().includes(name));
+            }
+            return false;
+        }, CONFIG.MAX_WAIT_MS).catch(() => { /* ignore */ });
+
+        log('Selected autocomplete name done:', name);
+        return true;
+    }
+
+    async function selectNamesSequentially(names) {
+        for (let i = 0; i < names.length; i++) {
+            const n = names[i];
+            showToast(`Kiválasztás: ${n}`);
+            try {
+                await selectAutocompleteName(n);
+            } catch (e) {
+                log('Failed to select name', n, e);
+                showToast('Hiba: ' + n + ' -> ' + (e.message || e));
+                // continue with next name
+            }
+            // small pause between selections
+            await new Promise(r => setTimeout(r, 350));
+        }
+        showToast('Nevek feldolgozva');
+    }
+
+    function showToast(msg, ms = 4000) {
+        const n = document.createElement('div');
+        n.textContent = msg;
+        n.style.cssText = 'position:fixed;top:20px;right:20px;background:#14892c;color:#fff;padding:10px 14px;border-radius:4px;z-index:20001;font-size:13px';
+        document.body.appendChild(n);
+        setTimeout(() => n.remove(), ms);
+    }
+
+    async function runSequence() {
+        try {
+            // 1) click tab
+            await clickTabAndWait();
+
+            // 2) compute dates
+            const today = new Date();
+            const end = new Date(today.getTime() + 14 * 24 * 60 * 60 * 1000);
+            const startStr = formatDateForField(today);
+            const endStr = formatDateForField(end);
+
+            // 3) set start date and validate
+            await setDateWithValidation(CONFIG.START_ID, startStr);
+
+            // Wait a bit for PrimeFaces/ajax reactions to settle
+            await new Promise(r => setTimeout(r, 400));
+
+            // 4) Try to set end date. PrimeFaces may overwrite end date based on start date or business rules.
+            // We'll attempt a small retry loop: if end gets overridden, reapply start+end up to CONFIG.RETRY_COUNT times.
+            let success = false;
+            for (let attempt = 1; attempt <= CONFIG.RETRY_COUNT; attempt++) {
+                log(`Attempting to set end date (attempt ${attempt}):`, endStr);
+                try {
+                    await setDateWithValidation(CONFIG.END_ID, endStr);
+                } catch (e) {
+                    log('Direct set of end date failed:', e.message || e);
+                }
+
+                // Wait for possible server-side overwrite to finish
+                await new Promise(r => setTimeout(r, 500));
+
+                const endInput = document.getElementById(CONFIG.END_ID);
+                const currentEnd = endInput ? endInput.value : null;
+                log('Current end after set attempt:', currentEnd);
+
+                if (currentEnd === endStr) {
+                    success = true;
+                    break;
+                }
+
+                // If not matched, try reapplying start then end (some pages recalc end based on start)
+                log('End date was changed by the page, reapplying start+end');
+                try { await setDateWithValidation(CONFIG.START_ID, startStr); } catch (e) { log('Reapply start failed', e); }
+                await new Promise(r => setTimeout(r, 250));
+            }
+
+            if (!success) {
+                throw new Error(`End date did not stabilize to ${endStr} after ${CONFIG.RETRY_COUNT} attempts`);
+            }
+
+            showToast('Dátumok beállítva: ' + startStr + ' → ' + endStr);
+            log('Sequence completed');
+        } catch (err) {
+            log('Sequence failed:', err);
+            showToast('Hiba a dátumok beállításakor: ' + (err.message || err));
+        }
+    }
+
+    // Inicializálás: csak a megadott oldalakon
+    function initialize() {
+        try {
+            const btns = createControlButton();
+            // main button
+            btns.main.addEventListener('click', () => {
+                btns.main.disabled = true;
+                btns.main.textContent = 'Feldolgozás...';
+                runSequence().finally(() => {
+                    btns.main.disabled = false;
+                    btns.main.textContent = 'Mentett emberek szabadságának megtekintése2';
+                });
+            });
+
+            // settings -> edit groups
+            btns.settingsBtn.addEventListener('click', () => {
+                editGroupsPrompt();
+                // refresh group select options
+                const opts = getGroupNames();
+                const sel = btns.groupSelect;
+                if (sel) {
+                    sel.innerHTML = '';
+                    opts.forEach(g => { const o = document.createElement('option'); o.value = g; o.textContent = g; sel.appendChild(o); });
+                }
+            });
+
+            // apply names (from selected group)
+            btns.applyNamesBtn.addEventListener('click', async () => {
+                const sel = btns.groupSelect;
+                const group = sel ? sel.value : CONFIG.DEFAULT_GROUP;
+                const names = getNamesForGroup(group);
+                if (!names || names.length === 0) {
+                    showToast('A kiválasztott csoport üres. Szerkesztés: ⚙');
+                    return;
+                }
+                // clear previous selections in the autocomplete (if any)
+                const hidden = findHiddenSelect();
+                if (hidden) { hidden.innerHTML = ''; }
+                // also remove tokens from wrapper
+                const wrapper = document.querySelector('[id*="j_idt263"]');
+                if (wrapper) {
+                    const tokens = Array.from(wrapper.querySelectorAll('li')).filter(li => !li.querySelector('input'));
+                    tokens.forEach(t => t.remove());
+                }
+
+                btns.applyNamesBtn.disabled = true;
+                await selectNamesSequentially(names);
+                btns.applyNamesBtn.disabled = false;
+            });
+
+            // group select change -> clear stored names and load group's names into storage for compatibility
+            if (btns.groupSelect) {
+                btns.groupSelect.addEventListener('change', (e) => {
+                    const g = e.target.value;
+                    // clear existing selections
+                    const hidden = findHiddenSelect(); if (hidden) hidden.innerHTML = '';
+                    const wrapper = document.querySelector('[id*="j_idt263"]'); if (wrapper) {
+                        const tokens = Array.from(wrapper.querySelectorAll('li')).filter(li => !li.querySelector('input')); tokens.forEach(t => t.remove());
+                    }
+                    // set names for group into storage to keep backward compatibility
+                    setNamesForGroup(g);
+                    showToast('Csoport kiválasztva: ' + g);
+                });
+            }
+
+            log('Gombok létrehozva');
+        } catch (e) {
+            log('Inicializálás hiba:', e);
+        }
+    }
+
+    // Várjuk, hogy a DOM betöltődjön, majd inicializálunk
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initialize);
+    } else {
+        initialize();
+    }
+
+})();
